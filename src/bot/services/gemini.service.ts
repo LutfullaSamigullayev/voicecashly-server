@@ -104,6 +104,16 @@ export class GeminiService {
     );
   }
 
+  async transcribeVoice(audioBuffer: Buffer, mimeType = 'audio/ogg'): Promise<string> {
+    const result = await this.withFallback(model =>
+      model.generateContent([
+        { inlineData: { data: audioBuffer.toString('base64'), mimeType } },
+        { text: 'Quyidagi audio yozuvni asl tilida (uz/ru/en) so\'zma-so\'z transkriptsiya qil. FAQAT matn qaytar, qo\'shimcha izoh kerak emas.' },
+      ]).then(r => r.response.text().trim()),
+    );
+    return result as unknown as string;
+  }
+
   async translateCategory(hint: string): Promise<{ uz: string; ru: string; en: string }> {
     try {
       const result = await this.withFallback(model =>
@@ -133,33 +143,44 @@ export class GeminiService {
 
   private async withFallback<T>(fn: (model: any) => Promise<T>): Promise<T> {
     const models = [this.model, this.fallbackModel];
+    let lastErr: any;
     for (let i = 0; i < models.length; i++) {
-      for (let attempt = 0; attempt < 3; attempt++) {
+      const isLastModel = i === models.length - 1;
+      const maxAttempts = isLastModel ? 2 : 1;
+      for (let attempt = 0; attempt < maxAttempts; attempt++) {
         try {
           return await fn(models[i]);
         } catch (err: any) {
-          const is429 = err?.status === 429 || err?.message?.includes('quota') || err?.message?.includes('429');
-          const is404 = err?.status === 404 || err?.message?.includes('not found');
+          lastErr = err;
+          const status = err?.status;
+          const msg = String(err?.message ?? '');
+          const is429 = status === 429 || msg.includes('quota') || msg.includes('429');
+          const is404 = status === 404 || msg.includes('not found');
+          const is503 = status === 503 || msg.includes('503') || msg.includes('overloaded') || msg.includes('Service Unavailable');
+          const is500 = status === 500 || status === 502 || status === 504;
 
-          if (is404) break; // try next model immediately
+          if (is404) break;
+
+          if (is503 || is500) {
+            console.warn(`Gemini ${status} (model ${i}), trying fallback immediately...`);
+            break;
+          }
 
           if (is429) {
-            if (attempt < 2) {
-              const delaySec = this.parseRetryDelay(err);
-              const delayMs = Math.min(delaySec * 1000, 15000);
+            if (attempt < maxAttempts - 1) {
+              const delayMs = Math.min(this.parseRetryDelay(err) * 1000, 5000);
               console.warn(`Gemini 429 (model ${i}, attempt ${attempt + 1}), retrying in ${delayMs}ms...`);
               await new Promise(r => setTimeout(r, delayMs));
               continue;
             }
-            console.warn(`Gemini model ${i} quota exhausted after retries, trying fallback...`);
-            break; // try next model
+            break;
           }
 
           throw err;
         }
       }
     }
-    throw new Error('Gemini quota exceeded on all models');
+    throw lastErr ?? new Error('Gemini unavailable on all models');
   }
 
   private parseIntent(raw: string): Intent {

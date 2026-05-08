@@ -18,6 +18,7 @@
   "btn_cancel": "❌ Отмена",
   "btn_edit": "✏️ Изменить",
   "not_understood": "❓ Не понял. Например: \"На логистику ушло 150 тысяч\"",
+  "ai_overloaded": "⚠️ Сервис ИИ сейчас перегружен. Попробуйте через несколько минут.",
   "recurring_notify": "📅 Авто-запись: {{name}} — {{amount}} {{currency}}\n📅 {{date}}",
   "budget_warning": "⚠️ Использовано {{percent}}% бюджета: {{category}}",
   "budget_exceeded": "🔴 Бюджет превышен: {{category}}!",

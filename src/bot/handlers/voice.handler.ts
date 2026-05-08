@@ -33,15 +33,114 @@ export class VoiceHandler {
       const file = await ctx.getFile();
       const fileUrl = `https://api.telegram.org/file/bot${process.env.BOT_TOKEN}/${file.file_path}`;
       const audioBuffer = await this.downloadBuffer(fileUrl);
-      const intent = await this.gemini.processVoice(audioBuffer, 'audio/ogg');
 
+      const awaiting = ctx.session?.awaitingField;
+      if (awaiting === 'edit_amount' || awaiting === 'edit_note' || awaiting === 'edit_category') {
+        await this.handleEditVoice(ctx, audioBuffer, awaiting);
+        await ctx.api.deleteMessage(ctx.chat.id, processing.message_id).catch(() => {});
+        return;
+      }
+
+      const intent = await this.gemini.processVoice(audioBuffer, 'audio/ogg');
       await ctx.api.deleteMessage(ctx.chat.id, processing.message_id).catch(() => {});
       await this.processIntent(ctx, intent);
-    } catch (err) {
+    } catch (err: any) {
       await ctx.api.deleteMessage(ctx.chat.id, processing.message_id).catch(() => {});
       console.error('Voice handler error:', err);
-      await ctx.reply(t(lang, 'not_understood'));
+      const status = err?.status;
+      const msg = String(err?.message ?? '');
+      const isOverloaded = status === 503 || status === 429 || status === 500 || status === 502 || status === 504
+        || msg.includes('overloaded') || msg.includes('Service Unavailable') || msg.includes('quota');
+      await ctx.reply(t(lang, isOverloaded ? 'ai_overloaded' : 'not_understood'));
     }
+  }
+
+  private async handleEditVoice(ctx: any, audioBuffer: Buffer, awaiting: string) {
+    const lang = ctx.session?.lang ?? 'uz';
+    const txId: number | null = ctx.session.editingTxId;
+    if (!txId) return ctx.reply(t(lang, 'not_understood'));
+
+    if (awaiting === 'edit_amount') {
+      const intent = await this.gemini.processVoice(audioBuffer, 'audio/ogg');
+      const amount = intent.amount;
+      if (!amount || isNaN(amount)) {
+        return ctx.reply(t(lang, 'ask_amount'));
+      }
+      await this.transactions.update(txId, 0, 'OWNER', { amount } as any);
+      ctx.session.awaitingField = null;
+      ctx.session.editingTxId = null;
+      return this.refreshEditedTransaction(ctx, txId);
+    }
+
+    if (awaiting === 'edit_note') {
+      const text = await this.gemini.transcribeVoice(audioBuffer, 'audio/ogg');
+      if (!text) return ctx.reply(t(lang, 'not_understood'));
+      await this.transactions.update(txId, 0, 'OWNER', {
+        noteUz: text, noteRu: text, noteEn: text,
+      } as any);
+      ctx.session.awaitingField = null;
+      ctx.session.editingTxId = null;
+      return this.refreshEditedTransaction(ctx, txId);
+    }
+
+    if (awaiting === 'edit_category') {
+      const intent = await this.gemini.processVoice(audioBuffer, 'audio/ogg');
+      const wsId = ctx.session?.activeWorkspaceId;
+      const tx = await this.transactions.findOne(txId);
+      if (!tx || !wsId) return ctx.reply(t(lang, 'not_understood'));
+      if (!intent.categoryHint) return ctx.reply(t(lang, 'ask_category'));
+
+      const { exact, similar } = await this.categories.findBestMatch(
+        intent.categoryHint, wsId, tx.type as any,
+      );
+      const matched = exact ?? similar;
+      if (!matched) {
+        const catName = intent.categoryHint;
+        return ctx.reply(`❓ "${catName}" kategoriyasi topilmadi. Mavjud kategoriyadan tanlang.`);
+      }
+      await this.transactions.update(txId, 0, 'OWNER', { categoryId: matched.id } as any);
+      ctx.session.awaitingField = null;
+      ctx.session.editingTxId = null;
+      return this.refreshEditedTransaction(ctx, txId);
+    }
+  }
+
+  async refreshEditedTransaction(ctx: any, txId: number) {
+    const lang = ctx.session?.lang ?? 'uz';
+    const chatId = ctx.chat?.id ?? ctx.from?.id;
+
+    const toDelete = [
+      ctx.session.lastTxMessageId,
+      ctx.session.lastBotPromptId,
+    ].filter(Boolean);
+
+    await Promise.all(
+      toDelete.map((msgId: number) =>
+        ctx.api.deleteMessage(chatId, msgId).catch(() => {}),
+      ),
+    );
+
+    const tx = await this.transactions.findOne(txId);
+    if (!tx) return;
+
+    const formatted = formatTransaction(lang, {
+      type: tx.type,
+      category: tx.category,
+      amount: Number(tx.amount),
+      currency: tx.currency,
+      exchangeRate: tx.exchangeRate ? Number(tx.exchangeRate) : undefined,
+      amountUzs: tx.amountUzs ? Number(tx.amountUzs) : undefined,
+      date: tx.date,
+    });
+
+    const sentMsg = await ctx.reply(formatted, {
+      reply_markup: new InlineKeyboard()
+        .text(t(lang, 'btn_cancel'), `delete_tx:${tx.id}`)
+        .text(t(lang, 'btn_edit'), `edit_tx:${tx.id}`),
+    });
+
+    ctx.session.lastTxMessageId = sentMsg.message_id;
+    ctx.session.lastBotPromptId = null;
   }
 
   async processIntent(ctx: any, intent: Intent) {

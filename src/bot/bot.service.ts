@@ -1,5 +1,6 @@
 import { Injectable, OnModuleInit } from '@nestjs/common';
 import { Bot, session } from 'grammy';
+import { run, RunnerHandle } from '@grammyjs/runner';
 import { CommandHandler } from './handlers/command.handler';
 import { VoiceHandler } from './handlers/voice.handler';
 import { TextHandler } from './handlers/text.handler';
@@ -20,6 +21,7 @@ export interface SessionData {
 @Injectable()
 export class BotService implements OnModuleInit {
   public bot: Bot<any>;
+  private runnerHandle: RunnerHandle | null = null;
 
   constructor(
     private readonly commandHandler: CommandHandler,
@@ -57,8 +59,17 @@ export class BotService implements OnModuleInit {
       await this.bot.api.setWebhook(`${webhookUrl}/bot/webhook`);
       console.log(`Webhook set: ${webhookUrl}/bot/webhook`);
     } else {
-      this.bot.start();
-      console.log('Bot started in polling mode');
+      await this.bot.api.deleteWebhook({ drop_pending_updates: true });
+      this.runnerHandle = run(this.bot, {
+        runner: { fetch: { allowed_updates: ['message', 'callback_query'] } },
+      });
+      console.log('Bot started in polling mode (concurrent runner, pending updates dropped)');
+    }
+  }
+
+  async onModuleDestroy() {
+    if (this.runnerHandle?.isRunning()) {
+      await this.runnerHandle.stop();
     }
   }
 

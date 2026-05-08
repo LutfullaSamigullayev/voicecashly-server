@@ -18,6 +18,7 @@
   "btn_cancel": "❌ Bekor qilish",
   "btn_edit": "✏️ Tahrirlash",
   "not_understood": "❓ Tushunmadim. Masalan: \"Logistikaga 150,000 so'm ketdi\"",
+  "ai_overloaded": "⚠️ AI xizmati hozir band. Bir necha daqiqadan keyin qayta urinib ko'ring.",
   "recurring_notify": "📅 Avtomatik qayd: {{name}} — {{amount}} {{currency}}\n📅 {{date}}",
   "budget_warning": "⚠️ {{category}} limitining {{percent}}% i ishlatildi",
   "budget_exceeded": "🔴 {{category}} limiti oshib ketdi!",
@@ -34,6 +35,6 @@
   "choose_currency": "💱 Default valyutani tanlang:",
   "choose_lang": "🌐 Tilni tanlang:",
   "currency_set": "✅ Default valyuta: {{currency}}",
-  "no_workspace": "❌ Workspace topilmadi. /start dan boshlang.",
+  "no_workspace": "❌ Xatolik botni qayta ishga tushirish kerak. /start",
   "invite_link": "🔗 Invite link:\n{{link}}\n\nXodimlarga yuboring!"
 }

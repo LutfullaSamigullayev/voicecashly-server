@@ -18,6 +18,7 @@
   "btn_cancel": "❌ Cancel",
   "btn_edit": "✏️ Edit",
   "not_understood": "❓ Didn't understand. Example: \"150,000 spent on logistics\"",
+  "ai_overloaded": "⚠️ AI service is currently overloaded. Please try again in a few minutes.",
   "recurring_notify": "📅 Auto-record: {{name}} — {{amount}} {{currency}}\n📅 {{date}}",
   "budget_warning": "⚠️ {{percent}}% of {{category}} budget used",
   "budget_exceeded": "🔴 {{category}} budget exceeded!",

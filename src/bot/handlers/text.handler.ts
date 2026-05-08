@@ -76,17 +76,26 @@ export class TextHandler {
     }
 
     // Hisobot so'rovi yoki tranzaksiya
-    const intent = await this.gemini.processText(text);
+    try {
+      const intent = await this.gemini.processText(text);
 
-    if (intent.type === 'QUERY_REPORT' && wsId) {
-      const data = await this.reportService.getReport(
-        wsId,
-        intent.reportType ?? 'balance',
-        intent.period ?? 'month',
-      );
-      return ctx.reply(formatReport(lang, data));
+      if (intent.type === 'QUERY_REPORT' && wsId) {
+        const data = await this.reportService.getReport(
+          wsId,
+          intent.reportType ?? 'balance',
+          intent.period ?? 'month',
+        );
+        return ctx.reply(formatReport(lang, data));
+      }
+
+      await this.voiceHandler.processIntent(ctx, intent);
+    } catch (err: any) {
+      console.error('Text handler error:', err);
+      const status = err?.status;
+      const msg = String(err?.message ?? '');
+      const isOverloaded = status === 503 || status === 429 || status === 500 || status === 502 || status === 504
+        || msg.includes('overloaded') || msg.includes('Service Unavailable') || msg.includes('quota');
+      await ctx.reply(t(lang, isOverloaded ? 'ai_overloaded' : 'not_understood'));
     }
-
-    await this.voiceHandler.processIntent(ctx, intent);
   }
 }
