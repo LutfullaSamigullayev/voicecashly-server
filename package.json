@@ -12,6 +12,7 @@
     "test": "jest"
   },
   "dependencies": {
+    "@deepgram/sdk": "^5.1.0",
     "@google/generative-ai": "^0.21.0",
     "@grammyjs/runner": "^2.0.3",
     "@nestjs/common": "^10.3.0",

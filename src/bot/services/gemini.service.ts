@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import Groq, { toFile } from 'groq-sdk';
+import { DeepgramClient } from '@deepgram/sdk';
 
 export interface Intent {
   type: 'ADD_TRANSACTION' | 'QUERY_REPORT' | 'DELETE_LAST' | 'UNKNOWN';
@@ -139,6 +140,9 @@ Aytilmagan → null
 @Injectable()
 export class GeminiService {
   private client = new Groq({ apiKey: process.env.GROQ_API_KEY });
+  private deepgram: DeepgramClient | null = process.env.DEEPGRAM_API_KEY
+    ? new DeepgramClient({ apiKey: process.env.DEEPGRAM_API_KEY })
+    : null;
   private chatModels = [
     'llama-3.3-70b-versatile',
     'llama-3.1-8b-instant',
@@ -251,6 +255,45 @@ Misollar:
   }
 
   private async transcribeRaw(audioBuffer: Buffer, mimeType: string, lang: 'uz' | 'ru' | 'en' = 'uz'): Promise<string> {
+    if (this.deepgram) {
+      try {
+        const text = await this.transcribeDeepgram(audioBuffer, mimeType, lang);
+        if (text) {
+          console.log('[Deepgram natija]:', JSON.stringify(text));
+          return text;
+        }
+      } catch (err: any) {
+        console.error('[Deepgram xato]:', err?.status ?? err?.code, err?.message);
+      }
+    }
+    return this.transcribeWhisper(audioBuffer, mimeType, lang);
+  }
+
+  private async transcribeDeepgram(audioBuffer: Buffer, mimeType: string, lang: 'uz' | 'ru' | 'en'): Promise<string> {
+    if (!this.deepgram) throw new Error('Deepgram not configured');
+    const tryRequest = async (model: string, language: string) => {
+      const response: any = await this.deepgram!.listen.v1.media.transcribeFile(
+        audioBuffer,
+        {
+          model,
+          language,
+          smart_format: true,
+          punctuate: true,
+        } as any,
+      );
+      const data = response?.data ?? response;
+      const transcript = data?.results?.channels?.[0]?.alternatives?.[0]?.transcript ?? '';
+      return String(transcript).trim();
+    };
+    try {
+      return await tryRequest('nova-2', lang);
+    } catch (err: any) {
+      console.warn('[Deepgram nova-2 xato, whisper-large bilan urinaman]:', err?.message);
+      return await tryRequest('whisper-large', lang);
+    }
+  }
+
+  private async transcribeWhisper(audioBuffer: Buffer, mimeType: string, lang: 'uz' | 'ru' | 'en'): Promise<string> {
     const ext = mimeType.includes('mp3') ? 'mp3'
       : mimeType.includes('wav') ? 'wav'
       : mimeType.includes('m4a') ? 'm4a'
@@ -277,12 +320,7 @@ Misollar:
       return await tryModel(this.audioModel);
     } catch (err: any) {
       console.error('[Whisper primary xato]:', err?.status, err?.message);
-      try {
-        return await tryModel(this.audioFallbackModel);
-      } catch (err2: any) {
-        console.error('[Whisper fallback xato]:', err2?.status, err2?.message);
-        throw err2;
-      }
+      return await tryModel(this.audioFallbackModel);
     }
   }
 
