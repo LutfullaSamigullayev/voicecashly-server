@@ -1,5 +1,5 @@
-import { GoogleGenerativeAI } from '@google/generative-ai';
 import { Injectable } from '@nestjs/common';
+import Groq, { toFile } from 'groq-sdk';
 
 export interface Intent {
   type: 'ADD_TRANSACTION' | 'QUERY_REPORT' | 'DELETE_LAST' | 'UNKNOWN';
@@ -15,8 +15,9 @@ export interface Intent {
 }
 
 const INTENT_PROMPT = `
-Sen moliyaviy bot assistentisan. Quyidagi JSON ni qaytargin. FAQAT JSON.
+Sen moliyaviy bot assistentisan. FAQAT JSON qaytargin (boshqa matn YOQ).
 
+JSON sxema:
 {
   "type": "ADD_TRANSACTION" | "QUERY_REPORT" | "DELETE_LAST" | "UNKNOWN",
   "txType": "INCOME" | "EXPENSE" | null,
@@ -77,122 +78,129 @@ dollar/доллар/$/USD → USD
 Aytilmagan → null
 
 === NOANIQ HOLATLAR — missingFields ===
-Quyidagi hollarda tegishli fieldni missingFields ga qo'sh:
 - Miqdor aytilmagan → ["amount"]
 - Kirim/chiqim aniqlab bo'lmaydi → ["txType"]
 `;
 
 @Injectable()
 export class GeminiService {
-  private client = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
-  private models = [
-    this.client.getGenerativeModel({ model: 'gemini-2.5-flash' }),
-    this.client.getGenerativeModel({ model: 'gemini-1.5-flash' }),
-    this.client.getGenerativeModel({ model: 'gemini-2.5-flash-lite' }),
+  private client = new Groq({ apiKey: process.env.GROQ_API_KEY });
+  private chatModels = [
+    'llama-3.3-70b-versatile',
+    'llama-3.1-8b-instant',
   ];
+  private audioModel = 'whisper-large-v3-turbo';
 
   async processVoice(audioBuffer: Buffer, mimeType = 'audio/ogg'): Promise<Intent> {
-    return this.withFallback(model =>
-      model.generateContent([
-        { inlineData: { data: audioBuffer.toString('base64'), mimeType } },
-        { text: INTENT_PROMPT },
-      ]).then(r => this.parseIntent(r.response.text())),
-    );
+    const text = await this.transcribeRaw(audioBuffer, mimeType);
+    return this.processText(text);
   }
 
   async processText(text: string): Promise<Intent> {
-    return this.withFallback(model =>
-      model.generateContent(`${INTENT_PROMPT}\n\nFoydalanuvchi xabari: ${text}`)
-        .then(r => this.parseIntent(r.response.text())),
-    );
+    const raw = await this.chatJSON([
+      { role: 'system', content: INTENT_PROMPT },
+      { role: 'user', content: `Foydalanuvchi xabari: ${text}` },
+    ]);
+    return this.parseIntent(raw);
   }
 
   async transcribeVoice(audioBuffer: Buffer, mimeType = 'audio/ogg'): Promise<string> {
-    const result = await this.withFallback(model =>
-      model.generateContent([
-        { inlineData: { data: audioBuffer.toString('base64'), mimeType } },
-        { text: 'Quyidagi audio yozuvni asl tilida (uz/ru/en) so\'zma-so\'z transkriptsiya qil. FAQAT matn qaytar, qo\'shimcha izoh kerak emas.' },
-      ]).then(r => r.response.text().trim()),
-    );
-    return result as unknown as string;
+    return this.transcribeRaw(audioBuffer, mimeType);
   }
 
   async transcribeCategoryName(audioBuffer: Buffer, mimeType = 'audio/ogg'): Promise<string> {
-    const prompt = `Audio yozuvni tinglang va undan FAQAT KATEGORIYA NOMINI ajratib bering (1-3 so'z, bosh harf bilan).
-Tinish belgilari, qo'shimchalar (-ga, -dan), to'liq jumla, izoh KERAK EMAS.
+    const text = await this.transcribeRaw(audioBuffer, mimeType);
+    const result = await this.chatCompletion([
+      {
+        role: 'system',
+        content: `Foydalanuvchining audio transkriptidan FAQAT KATEGORIYA NOMINI ajratib qaytar (1-3 so'z, bosh harf bilan). Tinish belgilari, qo'shimchalar (-ga, -dan), to'liq jumla, izoh KERAK EMAS. FAQAT NOM.
 Misollar:
-- "logistikaga ketdi" → Logistika
-- "oziq-ovqatga sarfladim" → Oziq-ovqat
-- "maoshim keldi" → Maosh
-- "transport uchun" → Transport
-- "savdo tushumi" → Savdo tushumi
-- "коммуналка" → Kommunal
-FAQAT NOMNI QAYTAR, BOSHQA HECH NARSA YOZMA.`;
-    const result = await this.withFallback(model =>
-      model.generateContent([
-        { inlineData: { data: audioBuffer.toString('base64'), mimeType } },
-        { text: prompt },
-      ]).then(r => r.response.text().trim().replace(/[.,!?;:"'`]+$/g, '').replace(/^["'`]+/, '')),
-    );
-    return result as unknown as string;
+"logistikaga ketdi" → Logistika
+"oziq-ovqatga sarfladim" → Oziq-ovqat
+"maoshim keldi" → Maosh
+"transport uchun" → Transport
+"коммуналка" → Kommunal`,
+      },
+      { role: 'user', content: text },
+    ], { maxTokens: 30 });
+    return (result ?? '').trim().replace(/[.,!?;:"'`]+$/g, '').replace(/^["'`]+/, '');
   }
 
   async translateCategory(hint: string): Promise<{ uz: string; ru: string; en: string }> {
     try {
-      const result = await this.withFallback(model =>
-        model.generateContent(
-          `Tarjima qil: "${hint}" so'zini quyidagi JSON formatida qaytargin. FAQAT JSON:\n{"uz":"...","ru":"...","en":"..."}`,
-        ).then(r => r.response.text()),
-      ) as unknown as string;
-      return JSON.parse((result as string).replace(/```json|```/g, '').trim());
+      const raw = await this.chatJSON([
+        {
+          role: 'user',
+          content: `Tarjima qil: "${hint}" so'zini quyidagi JSON formatida qaytargin. FAQAT JSON:\n{"uz":"...","ru":"...","en":"..."}`,
+        },
+      ]);
+      return JSON.parse(raw);
     } catch {
       return { uz: hint, ru: hint, en: hint };
     }
   }
 
-  private parseRetryDelay(err: any): number {
-    try {
-      const details = err?.errorDetails ?? err?.details ?? [];
-      for (const d of details) {
-        const retryInfo = d?.metadata?.retryDelay ?? d?.retryDelay;
-        if (retryInfo) {
-          const match = String(retryInfo).match(/(\d+)/);
-          if (match) return parseInt(match[1], 10);
-        }
-      }
-    } catch {}
-    return 5;
-  }
-
-  private async withFallback<T>(fn: (model: any) => Promise<T>): Promise<T> {
+  private async chatJSON(messages: any[]): Promise<string> {
     let lastErr: any;
-    for (let i = 0; i < this.models.length; i++) {
-      const isLastModel = i === this.models.length - 1;
-      const maxAttempts = isLastModel ? 2 : 1;
-      for (let attempt = 0; attempt < maxAttempts; attempt++) {
-        try {
-          return await fn(this.models[i]);
-        } catch (err: any) {
-          lastErr = err;
-          const status = err?.status;
-          const msg = String(err?.message ?? '');
-          const is429 = status === 429 || msg.includes('quota') || msg.includes('429');
-          const is404 = status === 404 || msg.includes('not found');
-          const is503 = status === 503 || msg.includes('503') || msg.includes('overloaded') || msg.includes('Service Unavailable');
-          const is500 = status === 500 || status === 502 || status === 504;
-
-          if (is404) break;
-
-          if (is503 || is500 || is429) {
-            console.warn(`Gemini ${status} (model ${i}), trying fallback immediately...`);
-            break;
-          }
-
-          throw err;
+    for (let i = 0; i < this.chatModels.length; i++) {
+      try {
+        const result = await this.client.chat.completions.create({
+          model: this.chatModels[i],
+          messages,
+          response_format: { type: 'json_object' },
+          temperature: 0.1,
+        });
+        return result.choices[0]?.message?.content ?? '';
+      } catch (err: any) {
+        lastErr = err;
+        const status = err?.status;
+        if (status === 429 || status === 503 || (status >= 500 && status < 600)) {
+          console.warn(`Groq chat ${status} (model ${i}), trying fallback...`);
+          continue;
         }
+        throw err;
       }
     }
-    throw lastErr ?? new Error('Gemini unavailable on all models');
+    throw lastErr ?? new Error('Groq chat unavailable');
+  }
+
+  private async chatCompletion(messages: any[], opts: { maxTokens?: number } = {}): Promise<string> {
+    let lastErr: any;
+    for (let i = 0; i < this.chatModels.length; i++) {
+      try {
+        const result = await this.client.chat.completions.create({
+          model: this.chatModels[i],
+          messages,
+          temperature: 0.1,
+          max_completion_tokens: opts.maxTokens,
+        });
+        return result.choices[0]?.message?.content ?? '';
+      } catch (err: any) {
+        lastErr = err;
+        const status = err?.status;
+        if (status === 429 || status === 503 || (status >= 500 && status < 600)) {
+          console.warn(`Groq chat ${status} (model ${i}), trying fallback...`);
+          continue;
+        }
+        throw err;
+      }
+    }
+    throw lastErr ?? new Error('Groq chat unavailable');
+  }
+
+  private async transcribeRaw(audioBuffer: Buffer, mimeType: string): Promise<string> {
+    const ext = mimeType.includes('mp3') ? 'mp3'
+      : mimeType.includes('wav') ? 'wav'
+      : mimeType.includes('m4a') ? 'm4a'
+      : 'ogg';
+    const file = await toFile(audioBuffer, `audio.${ext}`, { type: mimeType });
+    const result: any = await this.client.audio.transcriptions.create({
+      file,
+      model: this.audioModel,
+      response_format: 'text',
+    });
+    if (typeof result === 'string') return result.trim();
+    return String(result?.text ?? result ?? '').trim();
   }
 
   private parseIntent(raw: string): Intent {
