@@ -1,6 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import Groq, { toFile } from 'groq-sdk';
-import { DeepgramClient } from '@deepgram/sdk';
+import { GoogleGenerativeAI } from '@google/generative-ai';
 
 export interface Intent {
   type: 'ADD_TRANSACTION' | 'QUERY_REPORT' | 'DELETE_LAST' | 'UNKNOWN';
@@ -139,189 +138,101 @@ Aytilmagan → null
 
 @Injectable()
 export class GeminiService {
-  private client = new Groq({ apiKey: process.env.GROQ_API_KEY });
-  private deepgram: DeepgramClient | null = process.env.DEEPGRAM_API_KEY
-    ? new DeepgramClient({ apiKey: process.env.DEEPGRAM_API_KEY })
-    : null;
-  private chatModels = [
-    'llama-3.3-70b-versatile',
-    'llama-3.1-8b-instant',
-  ];
-  private audioModel = 'whisper-large-v3';
-  private audioFallbackModel = 'whisper-large-v3-turbo';
+  private genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
+  private models = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-2.5-flash-lite'];
 
   async processVoice(audioBuffer: Buffer, mimeType = 'audio/ogg', lang: 'uz' | 'ru' | 'en' = 'uz'): Promise<Intent> {
-    const text = await this.transcribeRaw(audioBuffer, mimeType, lang);
-    console.log('[Whisper transkripsiya]:', JSON.stringify(text));
-    if (!text || text.trim().length < 2) {
-      return this.parseIntent('');
-    }
-    return this.processText(text);
+    const audioPart = { inlineData: { data: audioBuffer.toString('base64'), mimeType } };
+    const prompt = `${INTENT_PROMPT}\n\nAudio xabar yuborildi (til: ${lang}). Audioni eshitib, yuqoridagi ko'rsatmalar bo'yicha JSON qaytar.`;
+    const raw = await this.generateJSON([{ role: 'user', parts: [{ text: prompt }, audioPart] }]);
+    console.log('[Gemini voice javob]:', raw);
+    const intent = this.parseIntent(raw);
+    console.log('[Parse natija]:', JSON.stringify(intent));
+    return intent;
   }
 
   async processText(text: string): Promise<Intent> {
-    const raw = await this.chatJSON([
-      { role: 'system', content: INTENT_PROMPT },
-      { role: 'user', content: `Foydalanuvchi xabari: ${text}` },
-    ]);
-    console.log('[Llama javob]:', raw);
+    const prompt = `${INTENT_PROMPT}\n\nFoydalanuvchi xabari: ${text}`;
+    const raw = await this.generateJSON([{ role: 'user', parts: [{ text: prompt }] }]);
+    console.log('[Gemini text javob]:', raw);
     const intent = this.parseIntent(raw);
     console.log('[Parse natija]:', JSON.stringify(intent));
     return intent;
   }
 
   async transcribeVoice(audioBuffer: Buffer, mimeType = 'audio/ogg', lang: 'uz' | 'ru' | 'en' = 'uz'): Promise<string> {
-    return this.transcribeRaw(audioBuffer, mimeType, lang);
+    const audioPart = { inlineData: { data: audioBuffer.toString('base64'), mimeType } };
+    const prompt = `Audioni so'zma-so'z transkripsiya qil (til: ${lang}). FAQAT transkriptsiya matnini qaytar, boshqa hech narsa yo'q.`;
+    return this.generateText([{ role: 'user', parts: [{ text: prompt }, audioPart] }]);
   }
 
   async transcribeCategoryName(audioBuffer: Buffer, mimeType = 'audio/ogg', lang: 'uz' | 'ru' | 'en' = 'uz'): Promise<string> {
-    const text = await this.transcribeRaw(audioBuffer, mimeType, lang);
-    const result = await this.chatCompletion([
-      {
-        role: 'system',
-        content: `Foydalanuvchining audio transkriptidan FAQAT KATEGORIYA NOMINI ajratib qaytar (1-3 so'z, bosh harf bilan). Tinish belgilari, qo'shimchalar (-ga, -dan), to'liq jumla, izoh KERAK EMAS. FAQAT NOM.
+    const audioPart = { inlineData: { data: audioBuffer.toString('base64'), mimeType } };
+    const prompt = `Audiodan FAQAT KATEGORIYA NOMINI ajratib qaytar (1-3 so'z, bosh harf bilan). Tinish belgilari, qo'shimchalar (-ga, -dan), to'liq jumla, izoh KERAK EMAS. FAQAT NOM.
 Misollar:
 "logistikaga ketdi" → Logistika
 "oziq-ovqatga sarfladim" → Oziq-ovqat
 "maoshim keldi" → Maosh
 "transport uchun" → Transport
-"коммуналка" → Kommunal`,
-      },
-      { role: 'user', content: text },
-    ], { maxTokens: 30 });
-    return (result ?? '').trim().replace(/[.,!?;:"'`]+$/g, '').replace(/^["'`]+/, '');
+"коммуналка" → Kommunal`;
+    const text = await this.generateText([{ role: 'user', parts: [{ text: prompt }, audioPart] }]);
+    return text.trim().replace(/[.,!?;:"'`]+$/g, '').replace(/^["'`]+/, '');
   }
 
   async translateCategory(hint: string): Promise<{ uz: string; ru: string; en: string }> {
     try {
-      const raw = await this.chatJSON([
-        {
-          role: 'user',
-          content: `Tarjima qil: "${hint}" so'zini quyidagi JSON formatida qaytargin. FAQAT JSON:\n{"uz":"...","ru":"...","en":"..."}`,
-        },
-      ]);
+      const prompt = `Tarjima qil: "${hint}" so'zini quyidagi JSON formatida qaytargin. FAQAT JSON:\n{"uz":"...","ru":"...","en":"..."}`;
+      const raw = await this.generateJSON([{ role: 'user', parts: [{ text: prompt }] }]);
       return JSON.parse(raw);
     } catch {
       return { uz: hint, ru: hint, en: hint };
     }
   }
 
-  private async chatJSON(messages: any[]): Promise<string> {
+  private async generateJSON(contents: any[]): Promise<string> {
     let lastErr: any;
-    for (let i = 0; i < this.chatModels.length; i++) {
+    for (const modelName of this.models) {
       try {
-        const result = await this.client.chat.completions.create({
-          model: this.chatModels[i],
-          messages,
-          response_format: { type: 'json_object' },
-          temperature: 0.1,
+        const model = this.genAI.getGenerativeModel({
+          model: modelName,
+          generationConfig: { responseMimeType: 'application/json', temperature: 0.1 },
         });
-        return result.choices[0]?.message?.content ?? '';
+        const result = await model.generateContent({ contents });
+        return result.response.text();
       } catch (err: any) {
         lastErr = err;
-        const status = err?.status;
+        const status = err?.status ?? err?.response?.status;
         if (status === 429 || status === 503 || (status >= 500 && status < 600)) {
-          console.warn(`Groq chat ${status} (model ${i}), trying fallback...`);
+          console.warn(`Gemini ${modelName} ${status}, fallback...`);
           continue;
         }
         throw err;
       }
     }
-    throw lastErr ?? new Error('Groq chat unavailable');
+    throw lastErr ?? new Error('Gemini unavailable');
   }
 
-  private async chatCompletion(messages: any[], opts: { maxTokens?: number } = {}): Promise<string> {
+  private async generateText(contents: any[]): Promise<string> {
     let lastErr: any;
-    for (let i = 0; i < this.chatModels.length; i++) {
+    for (const modelName of this.models) {
       try {
-        const result = await this.client.chat.completions.create({
-          model: this.chatModels[i],
-          messages,
-          temperature: 0.1,
-          max_completion_tokens: opts.maxTokens,
+        const model = this.genAI.getGenerativeModel({
+          model: modelName,
+          generationConfig: { temperature: 0.1 },
         });
-        return result.choices[0]?.message?.content ?? '';
+        const result = await model.generateContent({ contents });
+        return result.response.text().trim();
       } catch (err: any) {
         lastErr = err;
-        const status = err?.status;
+        const status = err?.status ?? err?.response?.status;
         if (status === 429 || status === 503 || (status >= 500 && status < 600)) {
-          console.warn(`Groq chat ${status} (model ${i}), trying fallback...`);
+          console.warn(`Gemini ${modelName} ${status}, fallback...`);
           continue;
         }
         throw err;
       }
     }
-    throw lastErr ?? new Error('Groq chat unavailable');
-  }
-
-  private async transcribeRaw(audioBuffer: Buffer, mimeType: string, lang: 'uz' | 'ru' | 'en' = 'uz'): Promise<string> {
-    if (this.deepgram) {
-      try {
-        const text = await this.transcribeDeepgram(audioBuffer, mimeType, lang);
-        if (text) {
-          console.log('[Deepgram natija]:', JSON.stringify(text));
-          return text;
-        }
-      } catch (err: any) {
-        console.error('[Deepgram xato]:', err?.status ?? err?.code, err?.message);
-      }
-    }
-    return this.transcribeWhisper(audioBuffer, mimeType, lang);
-  }
-
-  private async transcribeDeepgram(audioBuffer: Buffer, mimeType: string, lang: 'uz' | 'ru' | 'en'): Promise<string> {
-    if (!this.deepgram) throw new Error('Deepgram not configured');
-    const tryRequest = async (model: string, language: string) => {
-      const response: any = await this.deepgram!.listen.v1.media.transcribeFile(
-        audioBuffer,
-        {
-          model,
-          language,
-          smart_format: true,
-          punctuate: true,
-        } as any,
-      );
-      const data = response?.data ?? response;
-      const transcript = data?.results?.channels?.[0]?.alternatives?.[0]?.transcript ?? '';
-      return String(transcript).trim();
-    };
-    try {
-      return await tryRequest('nova-2', lang);
-    } catch (err: any) {
-      console.warn('[Deepgram nova-2 xato, whisper-large bilan urinaman]:', err?.message);
-      return await tryRequest('whisper-large', lang);
-    }
-  }
-
-  private async transcribeWhisper(audioBuffer: Buffer, mimeType: string, lang: 'uz' | 'ru' | 'en'): Promise<string> {
-    const ext = mimeType.includes('mp3') ? 'mp3'
-      : mimeType.includes('wav') ? 'wav'
-      : mimeType.includes('m4a') ? 'm4a'
-      : 'ogg';
-    const promptByLang: Record<string, string> = {
-      uz: "Quyida o'zbek tilida moliyaviy xabar: pul, so'm, dollar, kirim, chiqim, ketdi, keldi, sarfladim, oldim, logistika, ovqat, transport, maosh, savdo, ijara, mijoz, daromad, xarajat, oziq-ovqat, kommunal, reklama, marketing.",
-      ru: 'Финансовое сообщение: деньги, сум, доллар, доход, расход, ушло, пришло, потратил, получил, логистика, еда, транспорт, зарплата, продажа, аренда, клиент.',
-      en: 'Financial message: money, soum, dollar, income, expense, spent, received, logistics, food, transport, salary, sales, rent, client.',
-    };
-    const tryModel = async (model: string) => {
-      const file = await toFile(audioBuffer, `audio.${ext}`, { type: mimeType });
-      const result: any = await this.client.audio.transcriptions.create({
-        file,
-        model,
-        response_format: 'text',
-        language: lang,
-        prompt: promptByLang[lang] ?? promptByLang.uz,
-        temperature: 0,
-      } as any);
-      if (typeof result === 'string') return result.trim();
-      return String(result?.text ?? result ?? '').trim();
-    };
-    try {
-      return await tryModel(this.audioModel);
-    } catch (err: any) {
-      console.error('[Whisper primary xato]:', err?.status, err?.message);
-      return await tryModel(this.audioFallbackModel);
-    }
+    throw lastErr ?? new Error('Gemini unavailable');
   }
 
   private parseIntent(raw: string): Intent {
@@ -340,13 +251,11 @@ Misollar:
     let type = p?.type;
     let txType = p?.txType;
 
-    // Llama "type" ni "INCOME"/"EXPENSE" ga qo'yib qo'ysa — tuzatamiz
     if (validTxTypes.includes(type)) {
       txType = type;
       type = 'ADD_TRANSACTION';
     }
     if (!validTypes.includes(type)) {
-      // Agar txType mavjud yoki amount mavjud bo'lsa — tranzaksiya
       type = (txType || p?.amount) ? 'ADD_TRANSACTION' : 'UNKNOWN';
     }
     if (txType && !validTxTypes.includes(txType)) txType = null;
