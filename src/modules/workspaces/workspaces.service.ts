@@ -12,7 +12,7 @@ export class WorkspacesService {
 
     const workspace = await this.prisma.workspace.create({
       data: {
-        name: `${user.firstName} hisobi`,
+        name: user.firstName,
         isPersonal: true,
         inviteCode: null,
         members: { create: { userId, role: 'OWNER' } },

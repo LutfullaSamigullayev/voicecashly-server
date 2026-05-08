@@ -145,18 +145,14 @@ export class GeminiService {
     const audioPart = { inlineData: { data: audioBuffer.toString('base64'), mimeType } };
     const prompt = `${INTENT_PROMPT}\n\nAudio xabar yuborildi (til: ${lang}). Audioni eshitib, yuqoridagi ko'rsatmalar bo'yicha JSON qaytar.`;
     const raw = await this.generateJSON([{ role: 'user', parts: [{ text: prompt }, audioPart] }]);
-    console.log('[Gemini voice javob]:', raw);
     const intent = this.parseIntent(raw);
-    console.log('[Parse natija]:', JSON.stringify(intent));
     return intent;
   }
 
   async processText(text: string): Promise<Intent> {
     const prompt = `${INTENT_PROMPT}\n\nFoydalanuvchi xabari: ${text}`;
     const raw = await this.generateJSON([{ role: 'user', parts: [{ text: prompt }] }]);
-    console.log('[Gemini text javob]:', raw);
     const intent = this.parseIntent(raw);
-    console.log('[Parse natija]:', JSON.stringify(intent));
     return intent;
   }
 

@@ -39,12 +39,16 @@ export class CommandHandler {
   }
 
   private async handleStart(ctx: any) {
-    const lang = ctx.session?.lang ?? 'uz';
-    await ctx.reply(t(lang, 'start_welcome'), {
-      reply_markup: new InlineKeyboard()
-        .text(t(lang, 'workspace_personal'), 'start:personal').row()
-        .text(t(lang, 'workspace_team'), 'start:team'),
-    });
+    // Har gal /start'da til tanlash menyusini ko'rsatamiz
+    return ctx.reply(
+      "🌐 Tilni tanlang\n🇷🇺 Выберите язык\n🇬🇧 Choose language",
+      {
+        reply_markup: new InlineKeyboard()
+          .text("🇺🇿 O'zbek", 'startlang:uz')
+          .text('🇷🇺 Русский', 'startlang:ru')
+          .text('🇬🇧 English', 'startlang:en'),
+      },
+    );
   }
 
   private async handleHelp(ctx: any) {
@@ -108,7 +112,7 @@ export class CommandHandler {
       const link = await this.workspacesService.generateInviteLink(wsId, userId);
       await ctx.reply(t(lang, 'invite_link', { link }));
     } catch {
-      await ctx.reply('❌ Faqat OWNER invite yuborishi mumkin');
+      await ctx.reply(t(lang, 'only_owner_invite'));
     }
   }
 

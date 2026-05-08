@@ -44,7 +44,7 @@ export class TextHandler {
     // Tahrirlash — miqdor
     if (awaiting === 'edit_amount') {
       const amount = parseFloat(text.replace(/[^0-9.]/g, ''));
-      if (isNaN(amount)) return ctx.reply('❌ Noto\'g\'ri miqdor. Raqam kiriting:');
+      if (isNaN(amount)) return ctx.reply(t(lang, 'invalid_amount'));
       const txId = ctx.session.editingTxId;
       await this.transactions.update(txId, 0, 'OWNER', { amount } as any);
       ctx.session.awaitingField = null;
@@ -80,11 +80,11 @@ export class TextHandler {
     // Jamoa nomi (start:team oqimi)
     if (awaiting === 'team_name') {
       ctx.session.awaitingField = null;
-      return ctx.reply(`🏢 "${text}" nomli jamoa workspacemi?`, {
+      return ctx.reply(t(lang, 'team_create_confirm', { name: text }), {
         reply_markup: {
           inline_keyboard: [
-            [{ text: '✅ Ha', callback_data: `create_team:${text}` }],
-            [{ text: '❌ Bekor', callback_data: 'cancel' }],
+            [{ text: t(lang, 'btn_yes'), callback_data: `create_team:${text}` }],
+            [{ text: t(lang, 'btn_cancel'), callback_data: 'cancel' }],
           ],
         },
       });

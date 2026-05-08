@@ -28,6 +28,33 @@ export class CallbackHandler {
 
     await ctx.answerCallbackQuery().catch(() => {});
 
+    // /start birinchi marta — til tanlash
+    if (data.startsWith('startlang:')) {
+      const newLang = data.split(':')[1] as 'uz' | 'ru' | 'en';
+      ctx.session.lang = newLang;
+
+      const userId = await this.getUserId(ctx);
+      if (userId) {
+        await this.prisma.userSettings.upsert({
+          where: { userId },
+          update: { language: newLang.toUpperCase() as any },
+          create: { userId, language: newLang.toUpperCase() as any },
+        });
+      }
+
+      const chatId = ctx.chat?.id ?? ctx.from?.id;
+      const langMsgId = ctx.callbackQuery?.message?.message_id;
+      if (langMsgId) {
+        await ctx.api.deleteMessage(chatId, langMsgId).catch(() => {});
+      }
+
+      return ctx.reply(t(newLang, 'start_welcome'), {
+        reply_markup: new InlineKeyboard()
+          .text(t(newLang, 'workspace_personal'), 'start:personal').row()
+          .text(t(newLang, 'workspace_team'), 'start:team'),
+      });
+    }
+
     // /start workspace seçimi
     if (data === 'start:personal') {
       const userId = await this.getUserId(ctx);
@@ -36,7 +63,7 @@ export class CallbackHandler {
       const chatId = ctx.chat?.id ?? ctx.from?.id;
       const welcomeMsgId = ctx.callbackQuery?.message?.message_id;
       await ctx.editMessageReplyMarkup({
-        reply_markup: new InlineKeyboard().text('⏳ Yaratilmoqda...', 'noop'),
+        reply_markup: new InlineKeyboard().text(t(lang, 'creating'), 'noop'),
       }).catch(() => {});
 
       const ws = await this.workspacesService.createPersonalWorkspace(userId);
@@ -46,12 +73,12 @@ export class CallbackHandler {
       if (welcomeMsgId) {
         await ctx.api.deleteMessage(chatId, welcomeMsgId).catch(() => {});
       }
-      return ctx.reply(`✅ ${ws.name} yaratildi!\n\nOvozli yoki matnli xabar yuboring.`);
+      return ctx.reply(t(lang, 'workspace_created'));
     }
 
     if (data === 'start:team') {
       ctx.session.awaitingField = 'team_name';
-      return ctx.reply('🏢 Jamoa nomini kiriting:');
+      return ctx.reply(t(lang, 'team_name_prompt'));
     }
 
     if (data.startsWith('create_team:')) {
@@ -62,7 +89,7 @@ export class CallbackHandler {
       const chatId = ctx.chat?.id ?? ctx.from?.id;
       const welcomeMsgId = ctx.callbackQuery?.message?.message_id;
       await ctx.editMessageReplyMarkup({
-        reply_markup: new InlineKeyboard().text('⏳ Yaratilmoqda...', 'noop'),
+        reply_markup: new InlineKeyboard().text(t(lang, 'creating'), 'noop'),
       }).catch(() => {});
 
       const ws = await this.workspacesService.createTeamWorkspace(userId, name);
@@ -71,7 +98,7 @@ export class CallbackHandler {
       if (welcomeMsgId) {
         await ctx.api.deleteMessage(chatId, welcomeMsgId).catch(() => {});
       }
-      return ctx.reply(`✅ "${ws.name}" workspacei yaratildi!\n\nOvozli yoki matnli xabar yuboring.`);
+      return ctx.reply(t(lang, 'team_workspace_created', { name: ws.name }));
     }
 
     if (data === 'noop') return;
@@ -81,7 +108,7 @@ export class CallbackHandler {
       const wsId = parseInt(data.split(':')[1]);
       ctx.session.activeWorkspaceId = wsId;
       const ws = await this.prisma.workspace.findUnique({ where: { id: wsId } });
-      return ctx.reply(`✅ ${ws?.name} tanlandi`);
+      return ctx.reply(t(lang, 'workspace_selected', { name: ws?.name ?? '' }));
     }
 
     // Txtype tanlash
@@ -134,7 +161,7 @@ export class CallbackHandler {
         kb.text(name, `usecat:${c.id}`);
         if ((i + 1) % 2 === 0) kb.row();
       });
-      kb.row().text('🆕 Yangi nom bilan yaratish', 'newcat_input');
+      kb.row().text(t(lang, 'btn_create_with_new_name'), 'newcat_input');
       const msg = await ctx.reply(t(lang, 'ask_category'), { reply_markup: kb });
       ctx.session.lastBotPromptId = msg.message_id;
       this.voiceHandler.pushTransient(ctx, msg.message_id);
@@ -145,7 +172,7 @@ export class CallbackHandler {
     if (data === 'newcat_input') {
       ctx.session.awaitingField = 'category_new_input';
       ctx.session.pendingNewCatHint = null;
-      const msg = await ctx.reply('🆕 Yangi kategoriya nomini ovozli yoki matn shaklida yuboring:');
+      const msg = await ctx.reply(t(lang, 'prompt_new_cat_name'));
       ctx.session.lastBotPromptId = msg.message_id;
       this.voiceHandler.pushTransient(ctx, msg.message_id);
       return;
@@ -172,7 +199,7 @@ export class CallbackHandler {
         ctx.session.lastUserMsgId = null;
       }
 
-      await ctx.editMessageText('🗑 Tranzaksiya o\'chirildi');
+      await ctx.editMessageText(t(lang, 'tx_deleted'));
       const txMsgId = ctx.callbackQuery?.message?.message_id;
 
       setTimeout(() => {
@@ -197,10 +224,10 @@ export class CallbackHandler {
 
       await ctx.editMessageReplyMarkup({
         reply_markup: new InlineKeyboard()
-          .text(`💰 Miqdor: ${n(Number(tx.amount))}`, `edit_field:amount:${txId}`).row()
-          .text(`🏷 Kategoriya: ${catName}`, `edit_field:category:${txId}`).row()
-          .text(`📝 Izoh`, `edit_field:note:${txId}`).row()
-          .text('❌ Yopish', 'close_edit'),
+          .text(t(lang, 'btn_field_amount', { value: n(Number(tx.amount)) }), `edit_field:amount:${txId}`).row()
+          .text(t(lang, 'btn_field_category', { name: catName }), `edit_field:category:${txId}`).row()
+          .text(t(lang, 'btn_field_note'), `edit_field:note:${txId}`).row()
+          .text(t(lang, 'btn_close'), 'close_edit'),
       }).catch(() => {});
       return;
     }
@@ -213,14 +240,14 @@ export class CallbackHandler {
 
       if (field === 'amount') {
         await ctx.answerCallbackQuery();
-        const msg = await ctx.reply('💰 Yangi miqdorni kiriting:');
+        const msg = await ctx.reply(t(lang, 'prompt_new_amount'));
         ctx.session.lastBotPromptId = msg.message_id;
         return;
       }
 
       if (field === 'note') {
         await ctx.answerCallbackQuery();
-        const msg = await ctx.reply('📝 Yangi izohni kiriting:');
+        const msg = await ctx.reply(t(lang, 'prompt_new_note'));
         ctx.session.lastBotPromptId = msg.message_id;
         return;
       }
@@ -236,9 +263,9 @@ export class CallbackHandler {
           kb.text(name, `edit_cat:${c.id}:${txId}`);
           if ((i + 1) % 2 === 0) kb.row();
         });
-        kb.row().text('🆕 Yangi nom bilan yaratish', 'edit_newcat_input');
+        kb.row().text(t(lang, 'btn_create_with_new_name'), 'edit_newcat_input');
         await ctx.answerCallbackQuery();
-        const msg = await ctx.reply('🏷 Yangi kategoriyani tanlang:', { reply_markup: kb });
+        const msg = await ctx.reply(t(lang, 'prompt_new_category'), { reply_markup: kb });
         ctx.session.lastBotPromptId = msg.message_id;
         this.voiceHandler.pushTransient(ctx, msg.message_id);
         return;
@@ -250,7 +277,7 @@ export class CallbackHandler {
       ctx.session.awaitingField = 'edit_category_new_input';
       ctx.session.pendingNewCatHint = null;
       await ctx.answerCallbackQuery();
-      const msg = await ctx.reply('🆕 Yangi kategoriya nomini ovozli yoki matn shaklida yuboring:');
+      const msg = await ctx.reply(t(lang, 'prompt_new_cat_name'));
       ctx.session.lastBotPromptId = msg.message_id;
       this.voiceHandler.pushTransient(ctx, msg.message_id);
       return;
@@ -261,7 +288,7 @@ export class CallbackHandler {
       const txId = ctx.session.editingTxId;
       const hint = ctx.session.pendingNewCatHint;
       const wsId = ctx.session.activeWorkspaceId;
-      if (!txId || !hint || !wsId) return ctx.reply('❌ Xatolik');
+      if (!txId || !hint || !wsId) return ctx.reply(t(lang, 'error_generic'));
 
       const tx = await this.transactions.findOne(txId);
       if (!tx) return;
@@ -304,7 +331,7 @@ export class CallbackHandler {
           .text(t(lang, 'btn_cancel'), `delete_tx:${txId}`)
           .text(t(lang, 'btn_edit'), `edit_tx:${txId}`)
           .row()
-          .text('✅ Tasdiqlash', `confirm_tx:${txId}`),
+          .text(t(lang, 'btn_confirm'), `confirm_tx:${txId}`),
       }).catch(() => {});
       return;
     }

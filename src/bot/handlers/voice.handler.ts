@@ -125,7 +125,7 @@ export class VoiceHandler {
       const matched = exact ?? similar;
       if (!matched) {
         const catName = intent.categoryHint;
-        return ctx.reply(`❓ "${catName}" kategoriyasi topilmadi. Mavjud kategoriyadan tanlang.`);
+        return ctx.reply(t(lang, 'cat_not_found', { name: catName }));
       }
       await this.transactions.update(txId, 0, 'OWNER', { categoryId: matched.id } as any);
       ctx.session.awaitingField = null;
@@ -267,13 +267,13 @@ export class VoiceHandler {
       ctx.session.awaitingField = 'category_confirm';
       const catName = lang === 'uz' ? similar.nameUz : lang === 'ru' ? similar.nameRu : similar.nameEn;
       const msg = await ctx.reply(
-        `"${intent.categoryHint}" kategoriyasi yo'q.\n"${catName}" ga qo'shaylikmi?`,
+        t(lang, 'cat_not_exists_use_similar', { hint: intent.categoryHint!, similar: catName }),
         {
           reply_markup: new InlineKeyboard()
-            .text('✅ Ha', `usecat:${similar.id}`).row()
-            .text(`➕ "${intent.categoryHint}" yaratish`, `createcat:${intent.categoryHint}:${intent.txType}`).row()
-            .text('📋 Mavjuddan tanlash', 'listcats').row()
-            .text('🆕 Yangi nom bilan yaratish', 'newcat_input'),
+            .text(t(lang, 'btn_yes'), `usecat:${similar.id}`).row()
+            .text(t(lang, 'btn_create_named', { name: intent.categoryHint! }), `createcat:${intent.categoryHint}:${intent.txType}`).row()
+            .text(t(lang, 'btn_pick_existing'), 'listcats').row()
+            .text(t(lang, 'btn_create_with_new_name'), 'newcat_input'),
         },
       );
       ctx.session.lastBotPromptId = msg.message_id;
@@ -284,12 +284,12 @@ export class VoiceHandler {
     ctx.session.pendingTx = intent;
     ctx.session.awaitingField = 'category_new';
     const msg = await ctx.reply(
-      `"${intent.categoryHint}" kategoriyasi topilmadi.\nYangi kategoriya sifatida yarataylikmi?`,
+      t(lang, 'cat_not_exists_create_new', { hint: intent.categoryHint! }),
       {
         reply_markup: new InlineKeyboard()
-          .text(`✅ Ha, "${intent.categoryHint}" yaratish`, `createcat:${intent.categoryHint}:${intent.txType}`).row()
-          .text('📋 Mavjud kategoriyadan tanlash', 'listcats').row()
-          .text('🆕 Yangi nom bilan yaratish', 'newcat_input').row()
+          .text(t(lang, 'btn_create_named', { name: intent.categoryHint! }), `createcat:${intent.categoryHint}:${intent.txType}`).row()
+          .text(t(lang, 'btn_pick_existing_full'), 'listcats').row()
+          .text(t(lang, 'btn_create_with_new_name'), 'newcat_input').row()
           .text(t(lang, 'btn_cancel'), 'cancel'),
       },
     );
@@ -328,7 +328,7 @@ export class VoiceHandler {
     const cleanHint = hint.trim().replace(/[.!?,;:"'`]+$/g, '').replace(/^["'`]+/, '').trim();
 
     if (!cleanHint || cleanHint.length > 60) {
-      const m = await ctx.reply('❓ Kategoriya nomi tushunarsiz. Qayta ovozli yoki matn shaklida ayting:');
+      const m = await ctx.reply(t(lang, 'cat_name_unclear'));
       this.pushTransient(ctx, m.message_id);
       ctx.session.awaitingField = 'category_new_input';
       return;
@@ -337,10 +337,10 @@ export class VoiceHandler {
     ctx.session.pendingNewCatHint = cleanHint;
     ctx.session.awaitingField = null;
 
-    const msg = await ctx.reply(`🆕 "${cleanHint}" nomli kategoriyani yaratamizmi?`, {
+    const msg = await ctx.reply(t(lang, 'cat_create_confirm', { name: cleanHint }), {
       reply_markup: new InlineKeyboard()
-        .text('✅ Ha, yarat', 'confirm_newcat').row()
-        .text('🔄 Qayta ayting/yozing', 'newcat_input').row()
+        .text(t(lang, 'btn_yes_create'), 'confirm_newcat').row()
+        .text(t(lang, 'btn_say_again'), 'newcat_input').row()
         .text(t(lang, 'btn_cancel'), 'cancel'),
     });
     this.pushTransient(ctx, msg.message_id);
@@ -351,7 +351,7 @@ export class VoiceHandler {
     const cleanHint = hint.trim().replace(/[.!?,;:"'`]+$/g, '').replace(/^["'`]+/, '').trim();
 
     if (!cleanHint || cleanHint.length > 60) {
-      const m = await ctx.reply('❓ Kategoriya nomi tushunarsiz. Qayta ovozli yoki matn shaklida ayting:');
+      const m = await ctx.reply(t(lang, 'cat_name_unclear'));
       this.pushTransient(ctx, m.message_id);
       ctx.session.awaitingField = 'edit_category_new_input';
       return;
@@ -360,10 +360,10 @@ export class VoiceHandler {
     ctx.session.pendingNewCatHint = cleanHint;
     ctx.session.awaitingField = null;
 
-    const msg = await ctx.reply(`🆕 "${cleanHint}" nomli kategoriyani yaratamizmi?`, {
+    const msg = await ctx.reply(t(lang, 'cat_create_confirm', { name: cleanHint }), {
       reply_markup: new InlineKeyboard()
-        .text('✅ Ha, yarat', 'edit_confirm_newcat').row()
-        .text('🔄 Qayta ayting/yozing', 'edit_newcat_input').row()
+        .text(t(lang, 'btn_yes_create'), 'edit_confirm_newcat').row()
+        .text(t(lang, 'btn_say_again'), 'edit_newcat_input').row()
         .text(t(lang, 'btn_cancel'), 'cancel'),
     });
     this.pushTransient(ctx, msg.message_id);
