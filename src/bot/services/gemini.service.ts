@@ -15,20 +15,74 @@ export interface Intent {
 }
 
 const INTENT_PROMPT = `
-Sen moliyaviy bot assistentisan. FAQAT JSON qaytargin (boshqa matn YOQ).
+Sen moliyaviy bot assistentisan. Foydalanuvchining xabarini tahlil qilib JSON object qaytar. FAQAT JSON, boshqa matn yo'q. Transkriptsiya buzilgan bo'lishi mumkin — kontekst bo'yicha taxmin qil.
 
-JSON sxema:
+⚠️ MUHIM QOIDA: "type" va "txType" — IKKI ALOHIDA maydon. Ularni chalkashtirma!
+
+"type" maydoni faqat shu 4 qiymatdan biri bo'lishi shart:
+  - "ADD_TRANSACTION" — agar xabarda pul tushishi/ketishi/sarflanishi haqida gap bor (kirim/chiqim qo'shish)
+  - "QUERY_REPORT" — agar foydalanuvchi hisobot, balans, qancha sarflagani so'ragan bo'lsa
+  - "DELETE_LAST" — agar oxirgi tranzaksiyani o'chirish so'ralsa ("oxirgisini o'chir")
+  - "UNKNOWN" — yuqoridagilarning hech biri emas
+
+"txType" maydoni faqat shu qiymatlardan biri:
+  - "INCOME" — pul tushgan (kirim, daromad, oylik, tushum, keldi, oldim, qabul qildim)
+  - "EXPENSE" — pul ketgan (chiqim, xarajat, sarfladim, to'ladim, oldim, ketdi, sotib oldim)
+  - null — aniq emas
+
+❌ NOTO'G'RI: { "type": "EXPENSE", ... }   — "EXPENSE" type emas, txType
+✅ TO'G'RI:  { "type": "ADD_TRANSACTION", "txType": "EXPENSE", ... }
+
+Boshqa maydonlar:
+  - "amount": son yoki null (masalan 150000)
+  - "currency": "UZS" | "USD" | null
+  - "categoryHint": kategoriya nomi (masalan "Logistika", "Oziq-ovqat") yoki null
+  - "note": string yoki null
+  - "period": "today" | "week" | "month" | "year" | null
+  - "detectedLang": "uz" | "ru" | "en"
+  - "missingFields": array, masalan ["amount"] yoki ["txType"] yoki []
+  - "reportType": "income" | "expense" | "balance" | "top_expense" | "top_income" | "by_category" | null
+
+NAMUNA 1: "logistikaga 150 ming so'm ketdi"
 {
-  "type": "ADD_TRANSACTION" | "QUERY_REPORT" | "DELETE_LAST" | "UNKNOWN",
-  "txType": "INCOME" | "EXPENSE" | null,
-  "amount": number | null,
-  "currency": "UZS" | "USD" | null,
-  "categoryHint": string | null,
-  "note": string | null,
-  "period": "today" | "week" | "month" | "year" | null,
-  "detectedLang": "uz" | "ru" | "en",
+  "type": "ADD_TRANSACTION",
+  "txType": "EXPENSE",
+  "amount": 150000,
+  "currency": "UZS",
+  "categoryHint": "Logistika",
+  "note": null,
+  "period": null,
+  "detectedLang": "uz",
   "missingFields": [],
-  "reportType": "income" | "expense" | "balance" | "top_expense" | "top_income" | "by_category" | null
+  "reportType": null
+}
+
+NAMUNA 2: "ovqat uchun ketdi" (miqdor aytilmagan)
+{
+  "type": "ADD_TRANSACTION",
+  "txType": "EXPENSE",
+  "amount": null,
+  "currency": null,
+  "categoryHint": "Oziq-ovqat",
+  "note": null,
+  "period": null,
+  "detectedLang": "uz",
+  "missingFields": ["amount"],
+  "reportType": null
+}
+
+NAMUNA 3: "bu oyda qancha sarfladim"
+{
+  "type": "QUERY_REPORT",
+  "txType": null,
+  "amount": null,
+  "currency": null,
+  "categoryHint": null,
+  "note": null,
+  "period": "month",
+  "detectedLang": "uz",
+  "missingFields": [],
+  "reportType": "expense"
 }
 
 === KIRIM (o'zbek) ===
@@ -89,10 +143,15 @@ export class GeminiService {
     'llama-3.3-70b-versatile',
     'llama-3.1-8b-instant',
   ];
-  private audioModel = 'whisper-large-v3-turbo';
+  private audioModel = 'whisper-large-v3';
+  private audioFallbackModel = 'whisper-large-v3-turbo';
 
-  async processVoice(audioBuffer: Buffer, mimeType = 'audio/ogg'): Promise<Intent> {
-    const text = await this.transcribeRaw(audioBuffer, mimeType);
+  async processVoice(audioBuffer: Buffer, mimeType = 'audio/ogg', lang: 'uz' | 'ru' | 'en' = 'uz'): Promise<Intent> {
+    const text = await this.transcribeRaw(audioBuffer, mimeType, lang);
+    console.log('[Whisper transkripsiya]:', JSON.stringify(text));
+    if (!text || text.trim().length < 2) {
+      return this.parseIntent('');
+    }
     return this.processText(text);
   }
 
@@ -101,15 +160,18 @@ export class GeminiService {
       { role: 'system', content: INTENT_PROMPT },
       { role: 'user', content: `Foydalanuvchi xabari: ${text}` },
     ]);
-    return this.parseIntent(raw);
+    console.log('[Llama javob]:', raw);
+    const intent = this.parseIntent(raw);
+    console.log('[Parse natija]:', JSON.stringify(intent));
+    return intent;
   }
 
-  async transcribeVoice(audioBuffer: Buffer, mimeType = 'audio/ogg'): Promise<string> {
-    return this.transcribeRaw(audioBuffer, mimeType);
+  async transcribeVoice(audioBuffer: Buffer, mimeType = 'audio/ogg', lang: 'uz' | 'ru' | 'en' = 'uz'): Promise<string> {
+    return this.transcribeRaw(audioBuffer, mimeType, lang);
   }
 
-  async transcribeCategoryName(audioBuffer: Buffer, mimeType = 'audio/ogg'): Promise<string> {
-    const text = await this.transcribeRaw(audioBuffer, mimeType);
+  async transcribeCategoryName(audioBuffer: Buffer, mimeType = 'audio/ogg', lang: 'uz' | 'ru' | 'en' = 'uz'): Promise<string> {
+    const text = await this.transcribeRaw(audioBuffer, mimeType, lang);
     const result = await this.chatCompletion([
       {
         role: 'system',
@@ -188,37 +250,82 @@ Misollar:
     throw lastErr ?? new Error('Groq chat unavailable');
   }
 
-  private async transcribeRaw(audioBuffer: Buffer, mimeType: string): Promise<string> {
+  private async transcribeRaw(audioBuffer: Buffer, mimeType: string, lang: 'uz' | 'ru' | 'en' = 'uz'): Promise<string> {
     const ext = mimeType.includes('mp3') ? 'mp3'
       : mimeType.includes('wav') ? 'wav'
       : mimeType.includes('m4a') ? 'm4a'
       : 'ogg';
-    const file = await toFile(audioBuffer, `audio.${ext}`, { type: mimeType });
-    const result: any = await this.client.audio.transcriptions.create({
-      file,
-      model: this.audioModel,
-      response_format: 'text',
-    });
-    if (typeof result === 'string') return result.trim();
-    return String(result?.text ?? result ?? '').trim();
+    const promptByLang: Record<string, string> = {
+      uz: "Quyida o'zbek tilida moliyaviy xabar: pul, so'm, dollar, kirim, chiqim, ketdi, keldi, sarfladim, oldim, logistika, ovqat, transport, maosh, savdo, ijara, mijoz, daromad, xarajat, oziq-ovqat, kommunal, reklama, marketing.",
+      ru: 'Финансовое сообщение: деньги, сум, доллар, доход, расход, ушло, пришло, потратил, получил, логистика, еда, транспорт, зарплата, продажа, аренда, клиент.',
+      en: 'Financial message: money, soum, dollar, income, expense, spent, received, logistics, food, transport, salary, sales, rent, client.',
+    };
+    const tryModel = async (model: string) => {
+      const file = await toFile(audioBuffer, `audio.${ext}`, { type: mimeType });
+      const result: any = await this.client.audio.transcriptions.create({
+        file,
+        model,
+        response_format: 'text',
+        language: lang,
+        prompt: promptByLang[lang] ?? promptByLang.uz,
+        temperature: 0,
+      } as any);
+      if (typeof result === 'string') return result.trim();
+      return String(result?.text ?? result ?? '').trim();
+    };
+    try {
+      return await tryModel(this.audioModel);
+    } catch (err: any) {
+      console.error('[Whisper primary xato]:', err?.status, err?.message);
+      try {
+        return await tryModel(this.audioFallbackModel);
+      } catch (err2: any) {
+        console.error('[Whisper fallback xato]:', err2?.status, err2?.message);
+        throw err2;
+      }
+    }
   }
 
   private parseIntent(raw: string): Intent {
     try {
-      return JSON.parse(raw.replace(/```json|```/g, '').trim()) as Intent;
+      const parsed: any = JSON.parse(raw.replace(/```json|```/g, '').trim());
+      return this.normalizeIntent(parsed);
     } catch {
-      return {
-        type: 'UNKNOWN',
-        txType: null,
-        amount: null,
-        currency: null,
-        categoryHint: null,
-        note: null,
-        period: null,
-        detectedLang: 'uz',
-        missingFields: [],
-        reportType: null,
-      };
+      return this.normalizeIntent({});
     }
+  }
+
+  private normalizeIntent(p: any): Intent {
+    const validTypes = ['ADD_TRANSACTION', 'QUERY_REPORT', 'DELETE_LAST', 'UNKNOWN'];
+    const validTxTypes = ['INCOME', 'EXPENSE'];
+
+    let type = p?.type;
+    let txType = p?.txType;
+
+    // Llama "type" ni "INCOME"/"EXPENSE" ga qo'yib qo'ysa — tuzatamiz
+    if (validTxTypes.includes(type)) {
+      txType = type;
+      type = 'ADD_TRANSACTION';
+    }
+    if (!validTypes.includes(type)) {
+      // Agar txType mavjud yoki amount mavjud bo'lsa — tranzaksiya
+      type = (txType || p?.amount) ? 'ADD_TRANSACTION' : 'UNKNOWN';
+    }
+    if (txType && !validTxTypes.includes(txType)) txType = null;
+
+    return {
+      type,
+      txType: txType ?? null,
+      amount: typeof p?.amount === 'number' ? p.amount : null,
+      currency: ['UZS', 'USD'].includes(p?.currency) ? p.currency : null,
+      categoryHint: typeof p?.categoryHint === 'string' && p.categoryHint.trim() ? p.categoryHint : null,
+      note: typeof p?.note === 'string' && p.note.trim() ? p.note : null,
+      period: ['today', 'week', 'month', 'year'].includes(p?.period) ? p.period : null,
+      detectedLang: ['uz', 'ru', 'en'].includes(p?.detectedLang) ? p.detectedLang : 'uz',
+      missingFields: Array.isArray(p?.missingFields) ? p.missingFields : [],
+      reportType: ['income', 'expense', 'balance', 'top_expense', 'top_income', 'by_category'].includes(p?.reportType)
+        ? p.reportType
+        : null,
+    };
   }
 }

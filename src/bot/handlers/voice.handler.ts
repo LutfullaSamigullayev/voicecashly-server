@@ -57,20 +57,20 @@ export class VoiceHandler {
       }
 
       if (awaiting === 'category_new_input') {
-        const text = await this.gemini.transcribeCategoryName(audioBuffer, 'audio/ogg');
+        const text = await this.gemini.transcribeCategoryName(audioBuffer, 'audio/ogg', lang);
         await this.confirmNewCategory(ctx, text);
         await cleanupProcessing();
         return;
       }
 
       if (awaiting === 'edit_category_new_input') {
-        const text = await this.gemini.transcribeCategoryName(audioBuffer, 'audio/ogg');
+        const text = await this.gemini.transcribeCategoryName(audioBuffer, 'audio/ogg', lang);
         await this.confirmNewCategoryForEdit(ctx, text);
         await cleanupProcessing();
         return;
       }
 
-      const intent = await this.gemini.processVoice(audioBuffer, 'audio/ogg');
+      const intent = await this.gemini.processVoice(audioBuffer, 'audio/ogg', lang);
       await this.processIntent(ctx, intent);
       await cleanupProcessing();
     } catch (err: any) {
@@ -90,7 +90,7 @@ export class VoiceHandler {
     if (!txId) return ctx.reply(t(lang, 'not_understood'));
 
     if (awaiting === 'edit_amount') {
-      const intent = await this.gemini.processVoice(audioBuffer, 'audio/ogg');
+      const intent = await this.gemini.processVoice(audioBuffer, 'audio/ogg', lang);
       const amount = intent.amount;
       if (!amount || isNaN(amount)) {
         return ctx.reply(t(lang, 'ask_amount'));
@@ -102,7 +102,7 @@ export class VoiceHandler {
     }
 
     if (awaiting === 'edit_note') {
-      const text = await this.gemini.transcribeVoice(audioBuffer, 'audio/ogg');
+      const text = await this.gemini.transcribeVoice(audioBuffer, 'audio/ogg', lang);
       if (!text) return ctx.reply(t(lang, 'not_understood'));
       await this.transactions.update(txId, 0, 'OWNER', {
         noteUz: text, noteRu: text, noteEn: text,
@@ -113,7 +113,7 @@ export class VoiceHandler {
     }
 
     if (awaiting === 'edit_category') {
-      const intent = await this.gemini.processVoice(audioBuffer, 'audio/ogg');
+      const intent = await this.gemini.processVoice(audioBuffer, 'audio/ogg', lang);
       const wsId = ctx.session?.activeWorkspaceId;
       const tx = await this.transactions.findOne(txId);
       if (!tx || !wsId) return ctx.reply(t(lang, 'not_understood'));
