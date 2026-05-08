@@ -72,13 +72,16 @@ export class BotService implements OnModuleInit {
   }
 
   async onModuleInit() {
-    await this.registerCommandsMenu();
-
     const webhookUrl = process.env.WEBHOOK_URL;
     if (webhookUrl) {
-      await this.bot.api.setWebhook(`${webhookUrl}/bot/webhook`);
+      await this.bot.init();
+      await this.registerCommandsMenu();
+      await this.bot.api.setWebhook(`${webhookUrl}/bot/webhook`, {
+        allowed_updates: ['message', 'callback_query'],
+      });
       console.log(`Webhook set: ${webhookUrl}/bot/webhook`);
     } else {
+      await this.registerCommandsMenu();
       await this.bot.api.deleteWebhook({ drop_pending_updates: true });
       this.runnerHandle = run(this.bot, {
         runner: { fetch: { allowed_updates: ['message', 'callback_query'] } },

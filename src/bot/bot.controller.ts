@@ -7,7 +7,11 @@ export class BotController {
 
   @Post('webhook')
   async handleWebhook(@Body() update: any) {
-    await this.botService.handleUpdate(update);
+    try {
+      await this.botService.handleUpdate(update);
+    } catch (err) {
+      console.error('Webhook handler error:', err);
+    }
     return { ok: true };
   }
 }
