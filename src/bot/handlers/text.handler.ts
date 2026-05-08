@@ -94,6 +94,7 @@ export class TextHandler {
     try {
       ctx.session.lastUserMsgId = userMsgId;
       this.voiceHandler.pushTransient(ctx, userMsgId);
+      await this.voiceHandler.lockPreviousTxButtons(ctx);
       const intent = await this.gemini.processText(text);
 
       if (intent.type === 'QUERY_REPORT' && wsId) {

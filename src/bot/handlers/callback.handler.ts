@@ -32,9 +32,20 @@ export class CallbackHandler {
     if (data === 'start:personal') {
       const userId = await this.getUserId(ctx);
       if (!userId) return;
+
+      const chatId = ctx.chat?.id ?? ctx.from?.id;
+      const welcomeMsgId = ctx.callbackQuery?.message?.message_id;
+      await ctx.editMessageReplyMarkup({
+        reply_markup: new InlineKeyboard().text('⏳ Yaratilmoqda...', 'noop'),
+      }).catch(() => {});
+
       const ws = await this.workspacesService.createPersonalWorkspace(userId);
       ctx.session.activeWorkspaceId = ws.id;
       ctx.session.lang = lang;
+
+      if (welcomeMsgId) {
+        await ctx.api.deleteMessage(chatId, welcomeMsgId).catch(() => {});
+      }
       return ctx.reply(`✅ ${ws.name} yaratildi!\n\nOvozli yoki matnli xabar yuboring.`);
     }
 
@@ -47,10 +58,23 @@ export class CallbackHandler {
       const name = data.slice('create_team:'.length);
       const userId = await this.getUserId(ctx);
       if (!userId) return;
+
+      const chatId = ctx.chat?.id ?? ctx.from?.id;
+      const welcomeMsgId = ctx.callbackQuery?.message?.message_id;
+      await ctx.editMessageReplyMarkup({
+        reply_markup: new InlineKeyboard().text('⏳ Yaratilmoqda...', 'noop'),
+      }).catch(() => {});
+
       const ws = await this.workspacesService.createTeamWorkspace(userId, name);
       ctx.session.activeWorkspaceId = ws.id;
+
+      if (welcomeMsgId) {
+        await ctx.api.deleteMessage(chatId, welcomeMsgId).catch(() => {});
+      }
       return ctx.reply(`✅ "${ws.name}" workspacei yaratildi!\n\nOvozli yoki matnli xabar yuboring.`);
     }
+
+    if (data === 'noop') return;
 
     // Workspace almashtirish
     if (data.startsWith('switch:')) {
@@ -267,6 +291,24 @@ export class CallbackHandler {
     }
 
     if (data === 'close_edit') {
+      const txId = ctx.session.editingTxId;
+      ctx.session.editingTxId = null;
+      ctx.session.awaitingField = null;
+      if (!txId) {
+        return ctx.editMessageReplyMarkup({ reply_markup: new InlineKeyboard() });
+      }
+      return ctx.editMessageReplyMarkup({
+        reply_markup: new InlineKeyboard()
+          .text(t(lang, 'btn_cancel'), `delete_tx:${txId}`)
+          .text(t(lang, 'btn_edit'), `edit_tx:${txId}`)
+          .row()
+          .text('✅ Tasdiqlash', `confirm_tx:${txId}`),
+      });
+    }
+
+    // Tranzaksiyani tasdiqlash (tugmalarni qulflash)
+    if (data.startsWith('confirm_tx:')) {
+      ctx.session.lastTxMessageId = null;
       return ctx.editMessageReplyMarkup({ reply_markup: new InlineKeyboard() });
     }
 

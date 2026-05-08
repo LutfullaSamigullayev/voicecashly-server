@@ -85,8 +85,11 @@ Quyidagi hollarda tegishli fieldni missingFields ga qo'sh:
 @Injectable()
 export class GeminiService {
   private client = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
-  private model = this.client.getGenerativeModel({ model: 'gemini-2.5-flash' });
-  private fallbackModel = this.client.getGenerativeModel({ model: 'gemini-2.0-flash' });
+  private models = [
+    this.client.getGenerativeModel({ model: 'gemini-2.5-flash' }),
+    this.client.getGenerativeModel({ model: 'gemini-1.5-flash' }),
+    this.client.getGenerativeModel({ model: 'gemini-2.5-flash-lite' }),
+  ];
 
   async processVoice(audioBuffer: Buffer, mimeType = 'audio/ogg'): Promise<Intent> {
     return this.withFallback(model =>
@@ -162,14 +165,13 @@ FAQAT NOMNI QAYTAR, BOSHQA HECH NARSA YOZMA.`;
   }
 
   private async withFallback<T>(fn: (model: any) => Promise<T>): Promise<T> {
-    const models = [this.model, this.fallbackModel];
     let lastErr: any;
-    for (let i = 0; i < models.length; i++) {
-      const isLastModel = i === models.length - 1;
+    for (let i = 0; i < this.models.length; i++) {
+      const isLastModel = i === this.models.length - 1;
       const maxAttempts = isLastModel ? 2 : 1;
       for (let attempt = 0; attempt < maxAttempts; attempt++) {
         try {
-          return await fn(models[i]);
+          return await fn(this.models[i]);
         } catch (err: any) {
           lastErr = err;
           const status = err?.status;
@@ -181,18 +183,8 @@ FAQAT NOMNI QAYTAR, BOSHQA HECH NARSA YOZMA.`;
 
           if (is404) break;
 
-          if (is503 || is500) {
+          if (is503 || is500 || is429) {
             console.warn(`Gemini ${status} (model ${i}), trying fallback immediately...`);
-            break;
-          }
-
-          if (is429) {
-            if (attempt < maxAttempts - 1) {
-              const delayMs = Math.min(this.parseRetryDelay(err) * 1000, 5000);
-              console.warn(`Gemini 429 (model ${i}, attempt ${attempt + 1}), retrying in ${delayMs}ms...`);
-              await new Promise(r => setTimeout(r, delayMs));
-              continue;
-            }
             break;
           }
 

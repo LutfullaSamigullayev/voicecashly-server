@@ -32,6 +32,13 @@ export class VoiceHandler {
     const userMsgId = ctx.message?.message_id ?? null;
     ctx.session.lastUserMsgId = userMsgId;
     this.pushTransient(ctx, userMsgId);
+
+    const awaiting = ctx.session?.awaitingField;
+    const isEditFlow = typeof awaiting === 'string' && awaiting.startsWith('edit_');
+    if (!isEditFlow) {
+      await this.lockPreviousTxButtons(ctx);
+    }
+
     const processing = await ctx.reply(t(lang, 'processing'));
     const cleanupProcessing = async () => {
       await ctx.api.deleteMessage(ctx.chat.id, processing.message_id).catch(() => {});
@@ -288,6 +295,16 @@ export class VoiceHandler {
     );
     ctx.session.lastBotPromptId = msg.message_id;
     this.pushTransient(ctx, msg.message_id);
+  }
+
+  async lockPreviousTxButtons(ctx: any) {
+    const prevMsgId = ctx.session?.lastTxMessageId;
+    if (!prevMsgId) return;
+    const chatId = ctx.chat?.id ?? ctx.from?.id;
+    await ctx.api.editMessageReplyMarkup(chatId, prevMsgId, {
+      reply_markup: { inline_keyboard: [] },
+    }).catch(() => {});
+    ctx.session.lastTxMessageId = null;
   }
 
   pushTransient(ctx: any, msgId: number | null | undefined) {
