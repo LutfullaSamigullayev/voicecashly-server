@@ -32,7 +32,7 @@ export class WorkspacesController {
 
   @Get(':id/invite')
   async inviteLink(@Req() req: any, @Param('id') id: string) {
-    const link = await this.workspacesService.generateInviteLink(+id, req.user.sub);
-    return { link };
+    const code = await this.workspacesService.getInviteCode(+id, req.user.sub);
+    return { code };
   }
 }

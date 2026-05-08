@@ -7,6 +7,7 @@ import { TransactionsService } from '../../modules/transactions/transactions.ser
 import { VoiceHandler } from './voice.handler';
 import { formatTransaction } from '../services/format.service';
 import { t } from './command.handler';
+import { COMMANDS_BY_LANG } from '../helpers/commands';
 
 @Injectable()
 export class CallbackHandler {
@@ -43,15 +44,46 @@ export class CallbackHandler {
       }
 
       const chatId = ctx.chat?.id ?? ctx.from?.id;
+
+      // Shu chat uchun til menyusini yangilash
+      await ctx.api.setMyCommands(COMMANDS_BY_LANG[newLang], {
+        scope: { type: 'chat', chat_id: chatId },
+      }).catch(() => {});
+
       const langMsgId = ctx.callbackQuery?.message?.message_id;
       if (langMsgId) {
         await ctx.api.deleteMessage(chatId, langMsgId).catch(() => {});
+      }
+
+      // Mavjud workspace'larni ko'rsatish
+      if (userId) {
+        const workspaces = await this.workspacesService.getUserWorkspaces(userId);
+        if (workspaces.length > 0) {
+          const kb = new InlineKeyboard();
+          workspaces.forEach(m => {
+            const name = m.workspace.isPersonal
+              ? `👤 ${m.workspace.name}`
+              : `🏢 ${m.workspace.name}`;
+            kb.text(name, `switch:${m.workspaceId}`).row();
+          });
+          kb.text(t(newLang, 'workspace_new'), 'start:new');
+          return ctx.reply(t(newLang, 'start_select_workspace'), { reply_markup: kb });
+        }
       }
 
       return ctx.reply(t(newLang, 'start_welcome'), {
         reply_markup: new InlineKeyboard()
           .text(t(newLang, 'workspace_personal'), 'start:personal').row()
           .text(t(newLang, 'workspace_team'), 'start:team'),
+      });
+    }
+
+    // Yangi hisob yaratish (mavjud hisoblar ro'yxatidan)
+    if (data === 'start:new') {
+      return ctx.reply(t(lang, 'start_welcome'), {
+        reply_markup: new InlineKeyboard()
+          .text(t(lang, 'workspace_personal'), 'start:personal').row()
+          .text(t(lang, 'workspace_team'), 'start:team'),
       });
     }
 
@@ -359,7 +391,7 @@ export class CallbackHandler {
 
     // Til tanlash
     if (data.startsWith('lang:')) {
-      const newLang = data.split(':')[1];
+      const newLang = data.split(':')[1] as 'uz' | 'ru' | 'en';
       ctx.session.lang = newLang;
       const userId = await this.getUserId(ctx);
       if (userId) {
@@ -369,6 +401,11 @@ export class CallbackHandler {
           create: { userId, language: newLang.toUpperCase() as any },
         });
       }
+      // Shu chat uchun buyruqlar menyusini yangilash
+      const chatId = ctx.chat?.id ?? ctx.from?.id;
+      await ctx.api.setMyCommands(COMMANDS_BY_LANG[newLang], {
+        scope: { type: 'chat', chat_id: chatId },
+      }).catch(() => {});
       return ctx.reply(t(newLang, 'lang_changed'));
     }
 
@@ -402,6 +439,69 @@ export class CallbackHandler {
           .text('🇷🇺 Русский', 'lang:ru')
           .text('🇬🇧 English', 'lang:en'),
       });
+    }
+
+    // Workspace sozlamalari
+    if (data === 'settings:workspace') {
+      const wsId = ctx.session?.activeWorkspaceId;
+      if (!wsId) return ctx.reply(t(lang, 'no_workspace'));
+
+      const ws = await this.prisma.workspace.findUnique({ where: { id: wsId } });
+      if (!ws) return ctx.reply(t(lang, 'no_workspace'));
+
+      const userId = await this.getUserId(ctx);
+      const member = await this.prisma.workspaceMember.findUnique({
+        where: { workspaceId_userId: { workspaceId: wsId, userId: userId! } },
+      });
+
+      const kb = new InlineKeyboard();
+      if (member?.role === 'OWNER' || member?.role === 'ADMIN') {
+        kb.text(t(lang, 'btn_rename_ws'), 'settings:rename_ws').row();
+      }
+      if (member?.role === 'OWNER') {
+        kb.text(t(lang, 'btn_delete_ws'), 'settings:delete_ws');
+      }
+
+      return ctx.reply(t(lang, 'workspace_settings_menu', { name: ws.name }), { reply_markup: kb });
+    }
+
+    if (data === 'settings:rename_ws') {
+      ctx.session.awaitingField = 'rename_workspace';
+      const msg = await ctx.reply(t(lang, 'prompt_new_ws_name'));
+      ctx.session.lastBotPromptId = msg.message_id;
+      return;
+    }
+
+    if (data === 'settings:delete_ws') {
+      const wsId = ctx.session?.activeWorkspaceId;
+      const ws = await this.prisma.workspace.findUnique({ where: { id: wsId } });
+      return ctx.reply(t(lang, 'delete_ws_confirm', { name: ws?.name ?? '' }), {
+        reply_markup: new InlineKeyboard()
+          .text(t(lang, 'btn_delete_confirm'), 'confirm_delete_ws')
+          .text(t(lang, 'btn_cancel'), 'cancel'),
+      });
+    }
+
+    if (data === 'confirm_delete_ws') {
+      const wsId = ctx.session?.activeWorkspaceId;
+      const userId = await this.getUserId(ctx);
+      if (!wsId || !userId) return ctx.reply(t(lang, 'error_generic'));
+
+      try {
+        await this.workspacesService.deleteWorkspace(wsId, userId);
+        ctx.session.activeWorkspaceId = null;
+
+        const remaining = await this.workspacesService.getUserWorkspaces(userId);
+        if (remaining.length > 0) {
+          ctx.session.activeWorkspaceId = remaining[0].workspaceId;
+          return ctx.reply(t(lang, 'ws_deleted_switched', { name: remaining[0].workspace.name }));
+        }
+        return ctx.reply(t(lang, 'ws_deleted_no_workspace'));
+      } catch (e: any) {
+        const msg = e?.message ?? '';
+        if (msg.includes('only workspace')) return ctx.reply(t(lang, 'cannot_delete_only_ws'));
+        return ctx.reply(t(lang, 'error_generic'));
+      }
     }
   }
 

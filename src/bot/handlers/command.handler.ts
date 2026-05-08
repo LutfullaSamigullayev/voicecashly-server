@@ -39,7 +39,24 @@ export class CommandHandler {
   }
 
   private async handleStart(ctx: any) {
-    // Har gal /start'da til tanlash menyusini ko'rsatamiz
+    const param = ctx.match;
+
+    // Invite orqali kirish: /start join_XXXXXX
+    if (typeof param === 'string' && param.startsWith('join_')) {
+      const inviteCode = param.slice(5);
+      const lang = ctx.session?.lang ?? 'uz';
+      const userId = await this.getUserId(ctx);
+      if (!userId) return ctx.reply(t(lang, 'error_generic'));
+
+      try {
+        const ws = await this.workspacesService.joinByInviteCode(userId, inviteCode);
+        ctx.session.activeWorkspaceId = ws.id;
+        return ctx.reply(t(lang, 'joined_workspace', { name: ws.name }));
+      } catch {
+        return ctx.reply(t(lang, 'invite_invalid'));
+      }
+    }
+
     return ctx.reply(
       "🌐 Tilni tanlang\n🇷🇺 Выберите язык\n🇬🇧 Choose language",
       {
@@ -89,7 +106,8 @@ export class CommandHandler {
     await ctx.reply(t(lang, 'settings_menu'), {
       reply_markup: new InlineKeyboard()
         .text(t(lang, 'choose_currency'), 'settings:currency').row()
-        .text(t(lang, 'choose_lang'), 'settings:lang'),
+        .text(t(lang, 'choose_lang'), 'settings:lang').row()
+        .text(t(lang, 'settings_workspace_btn'), 'settings:workspace'),
     });
   }
 
@@ -109,10 +127,14 @@ export class CommandHandler {
     if (!wsId || !userId) return ctx.reply(t(lang, 'no_workspace'));
 
     try {
-      const link = await this.workspacesService.generateInviteLink(wsId, userId);
+      const code = await this.workspacesService.getInviteCode(wsId, userId);
+      const botUsername = ctx.me?.username;
+      const link = `https://t.me/${botUsername}?start=join_${code}`;
       await ctx.reply(t(lang, 'invite_link', { link }));
-    } catch {
-      await ctx.reply(t(lang, 'only_owner_invite'));
+    } catch (e: any) {
+      const msg = e?.message ?? '';
+      if (msg.includes('personal')) return ctx.reply(t(lang, 'only_team_invite'));
+      return ctx.reply(t(lang, 'only_owner_invite'));
     }
   }
 

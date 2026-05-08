@@ -4,6 +4,8 @@ import { GeminiService } from '../services/gemini.service';
 import { VoiceHandler } from './voice.handler';
 import { ReportService } from '../services/report.service';
 import { TransactionsService } from '../../modules/transactions/transactions.service';
+import { WorkspacesService } from '../../modules/workspaces/workspaces.service';
+import { PrismaService } from '../../shared/prisma/prisma.service';
 import { CallbackHandler } from './callback.handler';
 import { formatReport } from '../services/format.service';
 import { t } from './command.handler';
@@ -15,11 +17,20 @@ export class TextHandler {
     private readonly voiceHandler: VoiceHandler,
     private readonly reportService: ReportService,
     private readonly transactions: TransactionsService,
+    private readonly workspacesService: WorkspacesService,
+    private readonly prisma: PrismaService,
     private readonly callbackHandler: CallbackHandler,
   ) {}
 
   register(bot: Bot<any>) {
     bot.on('message:text', ctx => this.handleText(ctx));
+  }
+
+  private async getDbUserId(ctx: any): Promise<number | null> {
+    const tgId = BigInt(ctx.from?.id ?? 0);
+    if (!ctx.from?.id) return null;
+    const user = await this.prisma.user.findUnique({ where: { telegramId: tgId } });
+    return user?.id ?? null;
   }
 
   private async handleText(ctx: any) {
@@ -77,6 +88,23 @@ export class TextHandler {
       ctx.session.awaitingField = null;
       ctx.session.editingTxId = null;
       return this.callbackHandler.cleanupAndShowUpdated(ctx, txId, userMsgId);
+    }
+
+    // Workspace nomini o'zgartirish
+    if (awaiting === 'rename_workspace') {
+      const wsId = ctx.session?.activeWorkspaceId;
+      const userId = await this.getDbUserId(ctx);
+      if (!wsId || !userId) return ctx.reply(t(lang, 'error_generic'));
+
+      ctx.session.awaitingField = null;
+      this.voiceHandler.pushTransient(ctx, userMsgId);
+
+      try {
+        await this.workspacesService.renameWorkspace(wsId, userId, text.trim());
+        return ctx.reply(t(lang, 'ws_renamed', { name: text.trim() }));
+      } catch {
+        return ctx.reply(t(lang, 'error_generic'));
+      }
     }
 
     // Jamoa nomi (start:team oqimi)
