@@ -85,8 +85,8 @@ Quyidagi hollarda tegishli fieldni missingFields ga qo'sh:
 @Injectable()
 export class GeminiService {
   private client = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
-  private model = this.client.getGenerativeModel({ model: 'gemini-2.0-flash' });
-  private fallbackModel = this.client.getGenerativeModel({ model: 'gemini-1.5-flash' });
+  private model = this.client.getGenerativeModel({ model: 'gemini-2.5-flash' });
+  private fallbackModel = this.client.getGenerativeModel({ model: 'gemini-2.0-flash' });
 
   async processVoice(audioBuffer: Buffer, mimeType = 'audio/ogg'): Promise<Intent> {
     return this.withFallback(model =>
@@ -117,16 +117,49 @@ export class GeminiService {
     }
   }
 
-  private async withFallback<T>(fn: (model: any) => Promise<T>): Promise<T> {
+  private parseRetryDelay(err: any): number {
     try {
-      return await fn(this.model);
-    } catch (err: any) {
-      if (err?.status === 429 || err?.message?.includes('quota')) {
-        console.warn('gemini-2.0-flash quota exceeded, falling back to gemini-1.5-flash');
-        return await fn(this.fallbackModel);
+      const details = err?.errorDetails ?? err?.details ?? [];
+      for (const d of details) {
+        const retryInfo = d?.metadata?.retryDelay ?? d?.retryDelay;
+        if (retryInfo) {
+          const match = String(retryInfo).match(/(\d+)/);
+          if (match) return parseInt(match[1], 10);
+        }
       }
-      throw err;
+    } catch {}
+    return 5;
+  }
+
+  private async withFallback<T>(fn: (model: any) => Promise<T>): Promise<T> {
+    const models = [this.model, this.fallbackModel];
+    for (let i = 0; i < models.length; i++) {
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          return await fn(models[i]);
+        } catch (err: any) {
+          const is429 = err?.status === 429 || err?.message?.includes('quota') || err?.message?.includes('429');
+          const is404 = err?.status === 404 || err?.message?.includes('not found');
+
+          if (is404) break; // try next model immediately
+
+          if (is429) {
+            if (attempt < 2) {
+              const delaySec = this.parseRetryDelay(err);
+              const delayMs = Math.min(delaySec * 1000, 15000);
+              console.warn(`Gemini 429 (model ${i}, attempt ${attempt + 1}), retrying in ${delayMs}ms...`);
+              await new Promise(r => setTimeout(r, delayMs));
+              continue;
+            }
+            console.warn(`Gemini model ${i} quota exhausted after retries, trying fallback...`);
+            break; // try next model
+          }
+
+          throw err;
+        }
+      }
     }
+    throw new Error('Gemini quota exceeded on all models');
   }
 
   private parseIntent(raw: string): Intent {

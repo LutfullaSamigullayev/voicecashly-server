@@ -68,6 +68,10 @@ export class VoiceHandler {
   async askMissingFields(ctx: any, intent: Intent) {
     const lang = ctx.session?.lang ?? 'uz';
 
+    if (!ctx.session?.activeWorkspaceId) {
+      return ctx.reply(t(lang, 'no_workspace'));
+    }
+
     if (!intent.amount || intent.missingFields.includes('amount')) {
       ctx.session.pendingTx = intent;
       ctx.session.awaitingField = 'amount';
@@ -95,9 +99,11 @@ export class VoiceHandler {
       ctx.session.pendingTx = intent;
       ctx.session.awaitingField = 'category';
       const cats = await this.categories.getForType(wsId, intent.txType!);
-      return ctx.reply(t(lang, 'ask_category'), {
+      const msg = await ctx.reply(t(lang, 'ask_category'), {
         reply_markup: this.buildCategoryKeyboard(cats, lang),
       });
+      ctx.session.lastBotPromptId = msg.message_id;
+      return;
     }
 
     const { exact, similar } = await this.categories.findBestMatch(
@@ -113,7 +119,7 @@ export class VoiceHandler {
       ctx.session.pendingTx = intent;
       ctx.session.awaitingField = 'category_confirm';
       const catName = lang === 'uz' ? similar.nameUz : lang === 'ru' ? similar.nameRu : similar.nameEn;
-      return ctx.reply(
+      const msg = await ctx.reply(
         `"${intent.categoryHint}" kategoriyasi yo'q.\n"${catName}" ga qo'shaylikmi?`,
         {
           reply_markup: new InlineKeyboard()
@@ -122,11 +128,13 @@ export class VoiceHandler {
             .text('📋 Mavjuddan tanlash', 'listcats'),
         },
       );
+      ctx.session.lastBotPromptId = msg.message_id;
+      return;
     }
 
     ctx.session.pendingTx = intent;
     ctx.session.awaitingField = 'category_new';
-    return ctx.reply(
+    const msg = await ctx.reply(
       `"${intent.categoryHint}" kategoriyasi topilmadi.\nYangi kategoriya sifatida yarataylikmi?`,
       {
         reply_markup: new InlineKeyboard()
@@ -135,6 +143,7 @@ export class VoiceHandler {
           .text(t(lang, 'btn_cancel'), 'cancel'),
       },
     );
+    ctx.session.lastBotPromptId = msg.message_id;
   }
 
   async savePendingTransaction(ctx: any, intent: any) {
@@ -172,6 +181,12 @@ export class VoiceHandler {
     ctx.session.awaitingField = null;
     ctx.session.lastTxId = tx.id;
 
+    // Kategoriya prompt xabarini o'chirish
+    if (ctx.session.lastBotPromptId) {
+      await ctx.api.deleteMessage(ctx.chat.id, ctx.session.lastBotPromptId).catch(() => {});
+      ctx.session.lastBotPromptId = null;
+    }
+
     const formatted = formatTransaction(lang, {
       type: tx.type,
       category: tx.category,
@@ -182,11 +197,14 @@ export class VoiceHandler {
       date: tx.date,
     });
 
-    await ctx.reply(formatted, {
+    const sentMsg = await ctx.reply(formatted, {
       reply_markup: new InlineKeyboard()
         .text(t(lang, 'btn_cancel'), `delete_tx:${tx.id}`)
         .text(t(lang, 'btn_edit'), `edit_tx:${tx.id}`),
     });
+
+    ctx.session.lastTxId = tx.id;
+    ctx.session.lastTxMessageId = sentMsg.message_id;
 
     await this.checkBudgetWarning(ctx, wsId, tx.categoryId, lang);
   }
@@ -219,8 +237,23 @@ export class VoiceHandler {
 
   private async getUserId(ctx: any): Promise<number | null> {
     const tgId = BigInt(ctx.from?.id ?? 0);
-    const user = await this.prisma.user.findUnique({ where: { telegramId: tgId } });
-    return user?.id ?? null;
+    if (!ctx.from?.id) return null;
+
+    let user = await this.prisma.user.findUnique({ where: { telegramId: tgId } });
+
+    if (!user) {
+      user = await this.prisma.user.create({
+        data: {
+          telegramId: tgId,
+          firstName: ctx.from.first_name ?? 'User',
+          lastName: ctx.from.last_name ?? null,
+          username: ctx.from.username ?? null,
+          settings: { create: {} },
+        },
+      });
+    }
+
+    return user.id;
   }
 
   private downloadBuffer(url: string): Promise<Buffer> {

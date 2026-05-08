@@ -11,6 +11,10 @@ export interface SessionData {
   pendingTx: any | null;
   awaitingField: string | null;
   lastTxId: number | null;
+  lastTxMessageId: number | null;
+  lastBotPromptId: number | null;
+  editingTxId: number | null;
+  pendingTeamName: string | null;
 }
 
 @Injectable()
@@ -32,6 +36,10 @@ export class BotService implements OnModuleInit {
         pendingTx: null,
         awaitingField: null,
         lastTxId: null,
+        lastTxMessageId: null,
+        lastBotPromptId: null,
+        editingTxId: null,
+        pendingTeamName: null,
       }),
     }));
 

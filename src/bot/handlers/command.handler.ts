@@ -114,7 +114,22 @@ export class CommandHandler {
 
   private async getUserId(ctx: any): Promise<number | null> {
     const tgId = BigInt(ctx.from?.id ?? 0);
-    const user = await this.prisma.user.findUnique({ where: { telegramId: tgId } });
-    return user?.id ?? null;
+    if (!ctx.from?.id) return null;
+
+    let user = await this.prisma.user.findUnique({ where: { telegramId: tgId } });
+
+    if (!user) {
+      user = await this.prisma.user.create({
+        data: {
+          telegramId: tgId,
+          firstName: ctx.from.first_name ?? 'User',
+          lastName: ctx.from.last_name ?? null,
+          username: ctx.from.username ?? null,
+          settings: { create: {} },
+        },
+      });
+    }
+
+    return user.id;
   }
 }

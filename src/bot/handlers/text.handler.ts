@@ -3,6 +3,8 @@ import { Bot } from 'grammy';
 import { GeminiService } from '../services/gemini.service';
 import { VoiceHandler } from './voice.handler';
 import { ReportService } from '../services/report.service';
+import { TransactionsService } from '../../modules/transactions/transactions.service';
+import { CallbackHandler } from './callback.handler';
 import { formatReport } from '../services/format.service';
 import { t } from './command.handler';
 
@@ -12,6 +14,8 @@ export class TextHandler {
     private readonly gemini: GeminiService,
     private readonly voiceHandler: VoiceHandler,
     private readonly reportService: ReportService,
+    private readonly transactions: TransactionsService,
+    private readonly callbackHandler: CallbackHandler,
   ) {}
 
   register(bot: Bot<any>) {
@@ -21,11 +25,14 @@ export class TextHandler {
   private async handleText(ctx: any) {
     const lang = ctx.session?.lang ?? 'uz';
     const text = ctx.message.text;
+    const userMsgId: number = ctx.message.message_id;
     if (text.startsWith('/')) return;
 
     const wsId = ctx.session?.activeWorkspaceId;
+    const awaiting = ctx.session?.awaitingField;
 
-    if (ctx.session?.awaitingField === 'amount') {
+    // Miqdor so'rash (yangi tranzaksiya)
+    if (awaiting === 'amount') {
       const amount = parseFloat(text.replace(/[^0-9.]/g, ''));
       if (isNaN(amount)) return ctx.reply(t(lang, 'ask_amount'));
       ctx.session.pendingTx.amount = amount;
@@ -33,6 +40,42 @@ export class TextHandler {
       return this.voiceHandler.askMissingFields(ctx, ctx.session.pendingTx);
     }
 
+    // Tahrirlash — miqdor
+    if (awaiting === 'edit_amount') {
+      const amount = parseFloat(text.replace(/[^0-9.]/g, ''));
+      if (isNaN(amount)) return ctx.reply('❌ Noto\'g\'ri miqdor. Raqam kiriting:');
+      const txId = ctx.session.editingTxId;
+      await this.transactions.update(txId, 0, 'OWNER', { amount } as any);
+      ctx.session.awaitingField = null;
+      ctx.session.editingTxId = null;
+      return this.callbackHandler.cleanupAndShowUpdated(ctx, txId, userMsgId);
+    }
+
+    // Tahrirlash — izoh
+    if (awaiting === 'edit_note') {
+      const txId = ctx.session.editingTxId;
+      await this.transactions.update(txId, 0, 'OWNER', {
+        noteUz: text, noteRu: text, noteEn: text,
+      } as any);
+      ctx.session.awaitingField = null;
+      ctx.session.editingTxId = null;
+      return this.callbackHandler.cleanupAndShowUpdated(ctx, txId, userMsgId);
+    }
+
+    // Jamoa nomi (start:team oqimi)
+    if (awaiting === 'team_name') {
+      ctx.session.awaitingField = null;
+      return ctx.reply(`🏢 "${text}" nomli jamoa workspacemi?`, {
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: '✅ Ha', callback_data: `create_team:${text}` }],
+            [{ text: '❌ Bekor', callback_data: 'cancel' }],
+          ],
+        },
+      });
+    }
+
+    // Hisobot so'rovi yoki tranzaksiya
     const intent = await this.gemini.processText(text);
 
     if (intent.type === 'QUERY_REPORT' && wsId) {

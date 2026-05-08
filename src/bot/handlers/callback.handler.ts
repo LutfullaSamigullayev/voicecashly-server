@@ -5,6 +5,7 @@ import { WorkspacesService } from '../../modules/workspaces/workspaces.service';
 import { CategoriesService } from '../../modules/categories/categories.service';
 import { TransactionsService } from '../../modules/transactions/transactions.service';
 import { VoiceHandler } from './voice.handler';
+import { formatTransaction } from '../services/format.service';
 import { t } from './command.handler';
 
 @Injectable()
@@ -40,6 +41,15 @@ export class CallbackHandler {
     if (data === 'start:team') {
       ctx.session.awaitingField = 'team_name';
       return ctx.reply('🏢 Jamoa nomini kiriting:');
+    }
+
+    if (data.startsWith('create_team:')) {
+      const name = data.slice('create_team:'.length);
+      const userId = await this.getUserId(ctx);
+      if (!userId) return;
+      const ws = await this.workspacesService.createTeamWorkspace(userId, name);
+      ctx.session.activeWorkspaceId = ws.id;
+      return ctx.reply(`✅ "${ws.name}" workspacei yaratildi!\n\nOvozli yoki matnli xabar yuboring.`);
     }
 
     // Workspace almashtirish
@@ -100,7 +110,13 @@ export class CallbackHandler {
         kb.text(name, `usecat:${c.id}`);
         if ((i + 1) % 2 === 0) kb.row();
       });
-      return ctx.reply(t(lang, 'ask_category'), { reply_markup: kb });
+      // Eski kategoriya prompt xabarini o'chirib yangi listni ko'rsatish
+      if (ctx.session.lastBotPromptId) {
+        await ctx.api.deleteMessage(ctx.chat?.id ?? ctx.from?.id, ctx.session.lastBotPromptId).catch(() => {});
+      }
+      const msg = await ctx.reply(t(lang, 'ask_category'), { reply_markup: kb });
+      ctx.session.lastBotPromptId = msg.message_id;
+      return;
     }
 
     // Tranzaksiya o'chirish
@@ -111,6 +127,81 @@ export class CallbackHandler {
         await this.transactions.remove(txId, userId, 'OWNER');
         return ctx.editMessageText('🗑 Tranzaksiya o\'chirildi');
       }
+    }
+
+    // Tranzaksiya tahrirlash — menyu
+    if (data.startsWith('edit_tx:')) {
+      const txId = parseInt(data.split(':')[1]);
+      const tx = await this.transactions.findOne(txId);
+      if (!tx) return ctx.answerCallbackQuery('Tranzaksiya topilmadi');
+
+      ctx.session.editingTxId = txId;
+
+      const catName = lang === 'uz' ? tx.category.nameUz
+        : lang === 'ru' ? tx.category.nameRu : tx.category.nameEn;
+      const n = (v: number) => v.toLocaleString('uz-UZ');
+
+      return ctx.editMessageReplyMarkup({
+        reply_markup: new InlineKeyboard()
+          .text(`💰 Miqdor: ${n(Number(tx.amount))}`, `edit_field:amount:${txId}`).row()
+          .text(`🏷 Kategoriya: ${catName}`, `edit_field:category:${txId}`).row()
+          .text(`📝 Izoh`, `edit_field:note:${txId}`).row()
+          .text('❌ Yopish', 'close_edit'),
+      });
+    }
+
+    // Tahrirlash — maydon tanlash
+    if (data.startsWith('edit_field:')) {
+      const [, field, txId] = data.split(':');
+      ctx.session.editingTxId = parseInt(txId);
+      ctx.session.awaitingField = `edit_${field}`;
+
+      if (field === 'amount') {
+        await ctx.answerCallbackQuery();
+        const msg = await ctx.reply('💰 Yangi miqdorni kiriting:');
+        ctx.session.lastBotPromptId = msg.message_id;
+        return;
+      }
+
+      if (field === 'note') {
+        await ctx.answerCallbackQuery();
+        const msg = await ctx.reply('📝 Yangi izohni kiriting:');
+        ctx.session.lastBotPromptId = msg.message_id;
+        return;
+      }
+
+      if (field === 'category') {
+        const tx = await this.transactions.findOne(parseInt(txId));
+        if (!tx) return;
+        const wsId = ctx.session?.activeWorkspaceId;
+        const cats = await this.categories.getForType(wsId, tx.type as any);
+        const kb = new InlineKeyboard();
+        cats.forEach((c, i) => {
+          const name = lang === 'uz' ? c.nameUz : lang === 'ru' ? c.nameRu : c.nameEn;
+          kb.text(name, `edit_cat:${c.id}:${txId}`);
+          if ((i + 1) % 2 === 0) kb.row();
+        });
+        await ctx.answerCallbackQuery();
+        const msg = await ctx.reply('🏷 Yangi kategoriyani tanlang:', { reply_markup: kb });
+        ctx.session.lastBotPromptId = msg.message_id;
+        return;
+      }
+    }
+
+    // Tahrirlash — kategoriya saqlash
+    if (data.startsWith('edit_cat:')) {
+      const [, catId, txId] = data.split(':');
+      await this.transactions.update(parseInt(txId), await this.getUserId(ctx) ?? 0, 'OWNER', {
+        categoryId: parseInt(catId),
+      });
+      await this.cleanupAndShowUpdated(ctx, parseInt(txId), null);
+      ctx.session.awaitingField = null;
+      ctx.session.editingTxId = null;
+      return;
+    }
+
+    if (data === 'close_edit') {
+      return ctx.editMessageReplyMarkup({ reply_markup: new InlineKeyboard() });
     }
 
     // Bekor qilish
@@ -168,9 +259,65 @@ export class CallbackHandler {
     }
   }
 
+  async cleanupAndShowUpdated(ctx: any, txId: number, userMessageId: number | null) {
+    const lang = ctx.session?.lang ?? 'uz';
+    const chatId = ctx.chat?.id ?? ctx.from?.id;
+
+    // Eski xabarlarni o'chirish
+    const toDelete = [
+      ctx.session.lastTxMessageId,
+      ctx.session.lastBotPromptId,
+      userMessageId,
+    ].filter(Boolean);
+
+    await Promise.all(
+      toDelete.map(msgId =>
+        ctx.api.deleteMessage(chatId, msgId).catch(() => {}),
+      ),
+    );
+
+    // Yangilangan tranzaksiyani olish
+    const tx = await this.transactions.findOne(txId);
+    if (!tx) return;
+
+    const formatted = formatTransaction(lang, {
+      type: tx.type,
+      category: tx.category,
+      amount: Number(tx.amount),
+      currency: tx.currency,
+      exchangeRate: tx.exchangeRate ? Number(tx.exchangeRate) : undefined,
+      amountUzs: tx.amountUzs ? Number(tx.amountUzs) : undefined,
+      date: tx.date,
+    });
+
+    const sentMsg = await ctx.reply(formatted, {
+      reply_markup: new InlineKeyboard()
+        .text(t(lang, 'btn_cancel'), `delete_tx:${tx.id}`)
+        .text(t(lang, 'btn_edit'), `edit_tx:${tx.id}`),
+    });
+
+    ctx.session.lastTxMessageId = sentMsg.message_id;
+    ctx.session.lastBotPromptId = null;
+  }
+
   private async getUserId(ctx: any): Promise<number | null> {
     const tgId = BigInt(ctx.from?.id ?? 0);
-    const user = await this.prisma.user.findUnique({ where: { telegramId: tgId } });
-    return user?.id ?? null;
+    if (!ctx.from?.id) return null;
+
+    let user = await this.prisma.user.findUnique({ where: { telegramId: tgId } });
+
+    if (!user) {
+      user = await this.prisma.user.create({
+        data: {
+          telegramId: tgId,
+          firstName: ctx.from.first_name ?? 'User',
+          lastName: ctx.from.last_name ?? null,
+          username: ctx.from.username ?? null,
+          settings: { create: {} },
+        },
+      });
+    }
+
+    return user.id;
   }
 }
