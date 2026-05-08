@@ -1,0 +1,197 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// ─── Workspace ───────────────────────────────────────────────────
+model Workspace {
+  id           Int                @id @default(autoincrement())
+  name         String
+  isPersonal   Boolean            @default(false)
+  inviteCode   String?            @unique
+  members      WorkspaceMember[]
+  transactions Transaction[]
+  categories   Category[]
+  budgets      Budget[]
+  settings     WorkspaceSettings?
+  createdAt    DateTime           @default(now())
+}
+
+model WorkspaceMember {
+  id          Int       @id @default(autoincrement())
+  workspaceId Int
+  workspace   Workspace @relation(fields: [workspaceId], references: [id])
+  userId      Int
+  user        User      @relation(fields: [userId], references: [id])
+  role        Role      @default(MEMBER)
+  joinedAt    DateTime  @default(now())
+
+  @@unique([workspaceId, userId])
+}
+
+// ─── Foydalanuvchi ────────────────────────────────────────────────
+model User {
+  id           Int               @id @default(autoincrement())
+  telegramId   BigInt            @unique
+  firstName    String
+  lastName     String?
+  username     String?
+  language     Language          @default(UZ)
+  workspaces   WorkspaceMember[]
+  transactions Transaction[]
+  settings     UserSettings?
+  createdAt    DateTime          @default(now())
+}
+
+model UserSettings {
+  id              Int      @id @default(autoincrement())
+  userId          Int      @unique
+  user            User     @relation(fields: [userId], references: [id])
+  defaultCurrency Currency @default(UZS)
+  language        Language @default(UZ)
+  timezone        String   @default("Asia/Tashkent")
+  notifyBudget    Boolean  @default(true)
+  notifyRecurring Boolean  @default(true)
+}
+
+model WorkspaceSettings {
+  id              Int       @id @default(autoincrement())
+  workspaceId     Int       @unique
+  workspace       Workspace @relation(fields: [workspaceId], references: [id])
+  defaultCurrency Currency  @default(UZS)
+}
+
+// ─── Kategoriya ───────────────────────────────────────────────────
+model Category {
+  id           Int           @id @default(autoincrement())
+  workspaceId  Int
+  workspace    Workspace     @relation(fields: [workspaceId], references: [id])
+  nameUz       String
+  nameRu       String
+  nameEn       String
+  type         CategoryType
+  color        String        @default("#1D9E75")
+  icon         String        @default("tag")
+  isDefault    Boolean       @default(false)
+  isArchived   Boolean       @default(false)
+  sortOrder    Int           @default(0)
+  transactions Transaction[]
+  budgets      Budget[]
+
+  @@index([workspaceId])
+}
+
+enum CategoryType {
+  INCOME
+  EXPENSE
+  BOTH
+}
+
+// ─── Tranzaksiya ─────────────────────────────────────────────────
+model Transaction {
+  id           Int                   @id @default(autoincrement())
+  workspaceId  Int
+  workspace    Workspace             @relation(fields: [workspaceId], references: [id])
+  amount       Decimal               @db.Decimal(14, 2)
+  currency     Currency              @default(UZS)
+  amountUzs    Decimal?              @db.Decimal(14, 2)
+  exchangeRate Decimal?              @db.Decimal(10, 2)
+  type         TxType
+  categoryId   Int
+  category     Category             @relation(fields: [categoryId], references: [id])
+  noteUz       String?
+  noteRu       String?
+  noteEn       String?
+  date         DateTime             @default(now())
+  source       Source               @default(MANUAL)
+  userId       Int
+  user         User                 @relation(fields: [userId], references: [id])
+  recurringId  Int?
+  recurring    RecurringTransaction? @relation(fields: [recurringId], references: [id])
+  createdAt    DateTime             @default(now())
+  updatedAt    DateTime             @updatedAt
+
+  @@index([date])
+  @@index([workspaceId])
+  @@index([categoryId])
+}
+
+// ─── Takrorlanadigan tranzaksiya ─────────────────────────────────
+model RecurringTransaction {
+  id           Int           @id @default(autoincrement())
+  workspaceId  Int
+  amount       Decimal       @db.Decimal(14, 2)
+  currency     Currency      @default(UZS)
+  type         TxType
+  categoryId   Int
+  noteUz       String?
+  noteRu       String?
+  noteEn       String?
+  frequency    Frequency
+  nextDate     DateTime
+  isActive     Boolean       @default(true)
+  userId       Int
+  transactions Transaction[]
+  createdAt    DateTime      @default(now())
+}
+
+// ─── Byudjet ─────────────────────────────────────────────────────
+model Budget {
+  id          Int       @id @default(autoincrement())
+  workspaceId Int
+  workspace   Workspace @relation(fields: [workspaceId], references: [id])
+  categoryId  Int
+  category    Category  @relation(fields: [categoryId], references: [id])
+  amount      Decimal   @db.Decimal(14, 2)
+  currency    Currency  @default(UZS)
+  month       Int
+  year        Int
+
+  @@unique([workspaceId, categoryId, month, year])
+}
+
+// ─── Valyuta kurslari ────────────────────────────────────────────
+model ExchangeRate {
+  id   Int      @id @default(autoincrement())
+  from Currency
+  to   Currency
+  rate Decimal  @db.Decimal(12, 4)
+  date DateTime @default(now())
+
+  @@index([date])
+}
+
+enum Language  {
+  UZ
+  RU
+  EN
+}
+enum Role      { 
+  OWNER
+  ADMIN
+  MEMBER
+}
+enum TxType    { 
+  INCOME
+  EXPENSE
+}
+enum Currency  { 
+  UZS
+  USD
+}
+enum Source    { 
+  TELEGRAM
+  MANUAL
+  API
+}
+enum Frequency { 
+  DAILY
+  WEEKLY
+  MONTHLY
+  YEARLY
+}
