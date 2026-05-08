@@ -195,13 +195,14 @@ export class CallbackHandler {
         : lang === 'ru' ? tx.category.nameRu : tx.category.nameEn;
       const n = (v: number) => v.toLocaleString('uz-UZ');
 
-      return ctx.editMessageReplyMarkup({
+      await ctx.editMessageReplyMarkup({
         reply_markup: new InlineKeyboard()
           .text(`💰 Miqdor: ${n(Number(tx.amount))}`, `edit_field:amount:${txId}`).row()
           .text(`🏷 Kategoriya: ${catName}`, `edit_field:category:${txId}`).row()
           .text(`📝 Izoh`, `edit_field:note:${txId}`).row()
           .text('❌ Yopish', 'close_edit'),
-      });
+      }).catch(() => {});
+      return;
     }
 
     // Tahrirlash — maydon tanlash
@@ -295,21 +296,24 @@ export class CallbackHandler {
       ctx.session.editingTxId = null;
       ctx.session.awaitingField = null;
       if (!txId) {
-        return ctx.editMessageReplyMarkup({ reply_markup: new InlineKeyboard() });
+        await ctx.editMessageReplyMarkup({ reply_markup: new InlineKeyboard() }).catch(() => {});
+        return;
       }
-      return ctx.editMessageReplyMarkup({
+      await ctx.editMessageReplyMarkup({
         reply_markup: new InlineKeyboard()
           .text(t(lang, 'btn_cancel'), `delete_tx:${txId}`)
           .text(t(lang, 'btn_edit'), `edit_tx:${txId}`)
           .row()
           .text('✅ Tasdiqlash', `confirm_tx:${txId}`),
-      });
+      }).catch(() => {});
+      return;
     }
 
     // Tranzaksiyani tasdiqlash (tugmalarni qulflash)
     if (data.startsWith('confirm_tx:')) {
       ctx.session.lastTxMessageId = null;
-      return ctx.editMessageReplyMarkup({ reply_markup: new InlineKeyboard() });
+      await ctx.editMessageReplyMarkup({ reply_markup: new InlineKeyboard() }).catch(() => {});
+      return;
     }
 
     // Bekor qilish

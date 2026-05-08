@@ -62,7 +62,12 @@ export class BotService implements OnModuleInit {
     this.textHandler.register(this.bot);
     this.callbackHandler.register(this.bot);
 
-    this.bot.catch(err => console.error('Bot error:', err));
+    this.bot.catch(err => {
+      const desc = (err as any)?.error?.description ?? (err as any)?.description ?? '';
+      // Telegram'ning "message is not modified" xatosi xavfsiz — jim qilamiz
+      if (typeof desc === 'string' && desc.includes('message is not modified')) return;
+      console.error('Bot error:', err);
+    });
   }
 
   async onModuleInit() {
