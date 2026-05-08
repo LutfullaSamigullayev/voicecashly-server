@@ -114,6 +114,26 @@ export class GeminiService {
     return result as unknown as string;
   }
 
+  async transcribeCategoryName(audioBuffer: Buffer, mimeType = 'audio/ogg'): Promise<string> {
+    const prompt = `Audio yozuvni tinglang va undan FAQAT KATEGORIYA NOMINI ajratib bering (1-3 so'z, bosh harf bilan).
+Tinish belgilari, qo'shimchalar (-ga, -dan), to'liq jumla, izoh KERAK EMAS.
+Misollar:
+- "logistikaga ketdi" → Logistika
+- "oziq-ovqatga sarfladim" → Oziq-ovqat
+- "maoshim keldi" → Maosh
+- "transport uchun" → Transport
+- "savdo tushumi" → Savdo tushumi
+- "коммуналка" → Kommunal
+FAQAT NOMNI QAYTAR, BOSHQA HECH NARSA YOZMA.`;
+    const result = await this.withFallback(model =>
+      model.generateContent([
+        { inlineData: { data: audioBuffer.toString('base64'), mimeType } },
+        { text: prompt },
+      ]).then(r => r.response.text().trim().replace(/[.,!?;:"'`]+$/g, '').replace(/^["'`]+/, '')),
+    );
+    return result as unknown as string;
+  }
+
   async translateCategory(hint: string): Promise<{ uz: string; ru: string; en: string }> {
     try {
       const result = await this.withFallback(model =>

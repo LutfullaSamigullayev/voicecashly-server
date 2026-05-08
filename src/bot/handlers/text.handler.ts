@@ -35,6 +35,7 @@ export class TextHandler {
     if (awaiting === 'amount') {
       const amount = parseFloat(text.replace(/[^0-9.]/g, ''));
       if (isNaN(amount)) return ctx.reply(t(lang, 'ask_amount'));
+      this.voiceHandler.pushTransient(ctx, userMsgId);
       ctx.session.pendingTx.amount = amount;
       ctx.session.awaitingField = null;
       return this.voiceHandler.askMissingFields(ctx, ctx.session.pendingTx);
@@ -49,6 +50,20 @@ export class TextHandler {
       ctx.session.awaitingField = null;
       ctx.session.editingTxId = null;
       return this.callbackHandler.cleanupAndShowUpdated(ctx, txId, userMsgId);
+    }
+
+    // Yangi kategoriya nomi (matn bilan)
+    if (awaiting === 'category_new_input') {
+      this.voiceHandler.pushTransient(ctx, userMsgId);
+      await this.voiceHandler.confirmNewCategory(ctx, text);
+      return;
+    }
+
+    // Tahrirlash uchun yangi kategoriya nomi (matn bilan)
+    if (awaiting === 'edit_category_new_input') {
+      this.voiceHandler.pushTransient(ctx, userMsgId);
+      await this.voiceHandler.confirmNewCategoryForEdit(ctx, text);
+      return;
     }
 
     // Tahrirlash — izoh
@@ -77,6 +92,8 @@ export class TextHandler {
 
     // Hisobot so'rovi yoki tranzaksiya
     try {
+      ctx.session.lastUserMsgId = userMsgId;
+      this.voiceHandler.pushTransient(ctx, userMsgId);
       const intent = await this.gemini.processText(text);
 
       if (intent.type === 'QUERY_REPORT' && wsId) {

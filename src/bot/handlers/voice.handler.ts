@@ -1,12 +1,13 @@
 import { Injectable } from '@nestjs/common';
 import { Bot, InlineKeyboard } from 'grammy';
 import { GeminiService, Intent } from '../services/gemini.service';
+import { ReportService } from '../services/report.service';
 import { CategoriesService } from '../../modules/categories/categories.service';
 import { TransactionsService } from '../../modules/transactions/transactions.service';
 import { ExchangeRatesService } from '../../modules/exchange-rates/exchange-rates.service';
 import { BudgetsService } from '../../modules/budgets/budgets.service';
 import { PrismaService } from '../../shared/prisma/prisma.service';
-import { formatTransaction } from '../services/format.service';
+import { formatTransaction, formatReport } from '../services/format.service';
 import { t } from './command.handler';
 import * as https from 'https';
 
@@ -19,6 +20,7 @@ export class VoiceHandler {
     private readonly exchangeRates: ExchangeRatesService,
     private readonly budgets: BudgetsService,
     private readonly prisma: PrismaService,
+    private readonly reportService: ReportService,
   ) {}
 
   register(bot: Bot<any>) {
@@ -27,7 +29,13 @@ export class VoiceHandler {
 
   private async handleVoice(ctx: any) {
     const lang = ctx.session?.lang ?? 'uz';
+    const userMsgId = ctx.message?.message_id ?? null;
+    ctx.session.lastUserMsgId = userMsgId;
+    this.pushTransient(ctx, userMsgId);
     const processing = await ctx.reply(t(lang, 'processing'));
+    const cleanupProcessing = async () => {
+      await ctx.api.deleteMessage(ctx.chat.id, processing.message_id).catch(() => {});
+    };
 
     try {
       const file = await ctx.getFile();
@@ -37,21 +45,35 @@ export class VoiceHandler {
       const awaiting = ctx.session?.awaitingField;
       if (awaiting === 'edit_amount' || awaiting === 'edit_note' || awaiting === 'edit_category') {
         await this.handleEditVoice(ctx, audioBuffer, awaiting);
-        await ctx.api.deleteMessage(ctx.chat.id, processing.message_id).catch(() => {});
+        await cleanupProcessing();
+        return;
+      }
+
+      if (awaiting === 'category_new_input') {
+        const text = await this.gemini.transcribeCategoryName(audioBuffer, 'audio/ogg');
+        await this.confirmNewCategory(ctx, text);
+        await cleanupProcessing();
+        return;
+      }
+
+      if (awaiting === 'edit_category_new_input') {
+        const text = await this.gemini.transcribeCategoryName(audioBuffer, 'audio/ogg');
+        await this.confirmNewCategoryForEdit(ctx, text);
+        await cleanupProcessing();
         return;
       }
 
       const intent = await this.gemini.processVoice(audioBuffer, 'audio/ogg');
-      await ctx.api.deleteMessage(ctx.chat.id, processing.message_id).catch(() => {});
       await this.processIntent(ctx, intent);
+      await cleanupProcessing();
     } catch (err: any) {
-      await ctx.api.deleteMessage(ctx.chat.id, processing.message_id).catch(() => {});
       console.error('Voice handler error:', err);
       const status = err?.status;
       const msg = String(err?.message ?? '');
       const isOverloaded = status === 503 || status === 429 || status === 500 || status === 502 || status === 504
         || msg.includes('overloaded') || msg.includes('Service Unavailable') || msg.includes('quota');
       await ctx.reply(t(lang, isOverloaded ? 'ai_overloaded' : 'not_understood'));
+      await cleanupProcessing();
     }
   }
 
@@ -146,7 +168,7 @@ export class VoiceHandler {
   async processIntent(ctx: any, intent: Intent) {
     const lang = ctx.session?.lang ?? 'uz';
 
-    if (intent.type === 'UNKNOWN') {
+    if (!intent || !intent.type || intent.type === 'UNKNOWN') {
       return ctx.reply(t(lang, 'not_understood'));
     }
 
@@ -159,32 +181,50 @@ export class VoiceHandler {
       return ctx.reply(deleted ? t(lang, 'deleted_last') : t(lang, 'nothing_to_delete'));
     }
 
+    if (intent.type === 'QUERY_REPORT') {
+      const wsId = ctx.session?.activeWorkspaceId;
+      if (!wsId) return ctx.reply(t(lang, 'no_workspace'));
+      const data = await this.reportService.getReport(
+        wsId,
+        intent.reportType ?? 'balance',
+        intent.period ?? 'month',
+      );
+      return ctx.reply(formatReport(lang, data));
+    }
+
     if (intent.type === 'ADD_TRANSACTION') {
       return this.askMissingFields(ctx, intent);
     }
+
+    return ctx.reply(t(lang, 'not_understood'));
   }
 
   async askMissingFields(ctx: any, intent: Intent) {
     const lang = ctx.session?.lang ?? 'uz';
+    const missing = intent.missingFields ?? [];
 
     if (!ctx.session?.activeWorkspaceId) {
       return ctx.reply(t(lang, 'no_workspace'));
     }
 
-    if (!intent.amount || intent.missingFields.includes('amount')) {
+    if (!intent.amount || missing.includes('amount')) {
       ctx.session.pendingTx = intent;
       ctx.session.awaitingField = 'amount';
-      return ctx.reply(t(lang, 'ask_amount'));
+      const m = await ctx.reply(t(lang, 'ask_amount'));
+      this.pushTransient(ctx, m.message_id);
+      return;
     }
 
-    if (!intent.txType || intent.missingFields.includes('txType')) {
+    if (!intent.txType || missing.includes('txType')) {
       ctx.session.pendingTx = intent;
       ctx.session.awaitingField = 'txType';
-      return ctx.reply(t(lang, 'ask_txtype'), {
+      const m = await ctx.reply(t(lang, 'ask_txtype'), {
         reply_markup: new InlineKeyboard()
           .text(t(lang, 'btn_income'), 'txtype:INCOME')
           .text(t(lang, 'btn_expense'), 'txtype:EXPENSE'),
       });
+      this.pushTransient(ctx, m.message_id);
+      return;
     }
 
     await this.handleCategory(ctx, intent);
@@ -202,6 +242,7 @@ export class VoiceHandler {
         reply_markup: this.buildCategoryKeyboard(cats, lang),
       });
       ctx.session.lastBotPromptId = msg.message_id;
+      this.pushTransient(ctx, msg.message_id);
       return;
     }
 
@@ -224,10 +265,12 @@ export class VoiceHandler {
           reply_markup: new InlineKeyboard()
             .text('✅ Ha', `usecat:${similar.id}`).row()
             .text(`➕ "${intent.categoryHint}" yaratish`, `createcat:${intent.categoryHint}:${intent.txType}`).row()
-            .text('📋 Mavjuddan tanlash', 'listcats'),
+            .text('📋 Mavjuddan tanlash', 'listcats').row()
+            .text('🆕 Yangi nom bilan yaratish', 'newcat_input'),
         },
       );
       ctx.session.lastBotPromptId = msg.message_id;
+      this.pushTransient(ctx, msg.message_id);
       return;
     }
 
@@ -239,10 +282,90 @@ export class VoiceHandler {
         reply_markup: new InlineKeyboard()
           .text(`✅ Ha, "${intent.categoryHint}" yaratish`, `createcat:${intent.categoryHint}:${intent.txType}`).row()
           .text('📋 Mavjud kategoriyadan tanlash', 'listcats').row()
+          .text('🆕 Yangi nom bilan yaratish', 'newcat_input').row()
           .text(t(lang, 'btn_cancel'), 'cancel'),
       },
     );
     ctx.session.lastBotPromptId = msg.message_id;
+    this.pushTransient(ctx, msg.message_id);
+  }
+
+  pushTransient(ctx: any, msgId: number | null | undefined) {
+    if (!msgId) return;
+    if (!Array.isArray(ctx.session.transientMsgIds)) ctx.session.transientMsgIds = [];
+    ctx.session.transientMsgIds.push(msgId);
+  }
+
+  async cleanupTransients(ctx: any) {
+    const ids: number[] = ctx.session?.transientMsgIds ?? [];
+    if (ids.length === 0) return;
+    const chatId = ctx.chat?.id ?? ctx.from?.id;
+    await Promise.all(ids.map((id: number) =>
+      ctx.api.deleteMessage(chatId, id).catch(() => {}),
+    ));
+    ctx.session.transientMsgIds = [];
+  }
+
+  async confirmNewCategory(ctx: any, hint: string) {
+    const lang = ctx.session?.lang ?? 'uz';
+    const cleanHint = hint.trim().replace(/[.!?,;:"'`]+$/g, '').replace(/^["'`]+/, '').trim();
+
+    if (!cleanHint || cleanHint.length > 60) {
+      const m = await ctx.reply('❓ Kategoriya nomi tushunarsiz. Qayta ovozli yoki matn shaklida ayting:');
+      this.pushTransient(ctx, m.message_id);
+      ctx.session.awaitingField = 'category_new_input';
+      return;
+    }
+
+    ctx.session.pendingNewCatHint = cleanHint;
+    ctx.session.awaitingField = null;
+
+    const msg = await ctx.reply(`🆕 "${cleanHint}" nomli kategoriyani yaratamizmi?`, {
+      reply_markup: new InlineKeyboard()
+        .text('✅ Ha, yarat', 'confirm_newcat').row()
+        .text('🔄 Qayta ayting/yozing', 'newcat_input').row()
+        .text(t(lang, 'btn_cancel'), 'cancel'),
+    });
+    this.pushTransient(ctx, msg.message_id);
+  }
+
+  async confirmNewCategoryForEdit(ctx: any, hint: string) {
+    const lang = ctx.session?.lang ?? 'uz';
+    const cleanHint = hint.trim().replace(/[.!?,;:"'`]+$/g, '').replace(/^["'`]+/, '').trim();
+
+    if (!cleanHint || cleanHint.length > 60) {
+      const m = await ctx.reply('❓ Kategoriya nomi tushunarsiz. Qayta ovozli yoki matn shaklida ayting:');
+      this.pushTransient(ctx, m.message_id);
+      ctx.session.awaitingField = 'edit_category_new_input';
+      return;
+    }
+
+    ctx.session.pendingNewCatHint = cleanHint;
+    ctx.session.awaitingField = null;
+
+    const msg = await ctx.reply(`🆕 "${cleanHint}" nomli kategoriyani yaratamizmi?`, {
+      reply_markup: new InlineKeyboard()
+        .text('✅ Ha, yarat', 'edit_confirm_newcat').row()
+        .text('🔄 Qayta ayting/yozing', 'edit_newcat_input').row()
+        .text(t(lang, 'btn_cancel'), 'cancel'),
+    });
+    this.pushTransient(ctx, msg.message_id);
+  }
+
+  async createConfirmedCategory(ctx: any) {
+    const lang = ctx.session?.lang ?? 'uz';
+    const wsId = ctx.session?.activeWorkspaceId;
+    const pending = ctx.session?.pendingTx;
+    const hint = ctx.session?.pendingNewCatHint;
+    if (!wsId || !pending || !hint) return ctx.reply(t(lang, 'no_workspace'));
+
+    const txType = (pending.txType ?? 'EXPENSE') as 'INCOME' | 'EXPENSE';
+    const newCat = await this.categories.createFromHint(hint, wsId, txType);
+    pending.resolvedCategoryId = newCat.id;
+    ctx.session.pendingNewCatHint = null;
+    ctx.session.awaitingField = null;
+
+    return this.savePendingTransaction(ctx, pending);
   }
 
   async savePendingTransaction(ctx: any, intent: any) {
@@ -279,8 +402,10 @@ export class VoiceHandler {
     ctx.session.pendingTx = null;
     ctx.session.awaitingField = null;
     ctx.session.lastTxId = tx.id;
+    ctx.session.pendingNewCatHint = null;
 
-    // Kategoriya prompt xabarini o'chirish
+    // Barcha oraliq xabarlar (menyu, prompt, user voice/text)ni o'chirish
+    await this.cleanupTransients(ctx);
     if (ctx.session.lastBotPromptId) {
       await ctx.api.deleteMessage(ctx.chat.id, ctx.session.lastBotPromptId).catch(() => {});
       ctx.session.lastBotPromptId = null;

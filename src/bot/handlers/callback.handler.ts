@@ -110,23 +110,53 @@ export class CallbackHandler {
         kb.text(name, `usecat:${c.id}`);
         if ((i + 1) % 2 === 0) kb.row();
       });
-      // Eski kategoriya prompt xabarini o'chirib yangi listni ko'rsatish
-      if (ctx.session.lastBotPromptId) {
-        await ctx.api.deleteMessage(ctx.chat?.id ?? ctx.from?.id, ctx.session.lastBotPromptId).catch(() => {});
-      }
+      kb.row().text('🆕 Yangi nom bilan yaratish', 'newcat_input');
       const msg = await ctx.reply(t(lang, 'ask_category'), { reply_markup: kb });
       ctx.session.lastBotPromptId = msg.message_id;
+      this.voiceHandler.pushTransient(ctx, msg.message_id);
       return;
+    }
+
+    // Yangi kategoriya nomi (ovoz/matn bilan)
+    if (data === 'newcat_input') {
+      ctx.session.awaitingField = 'category_new_input';
+      ctx.session.pendingNewCatHint = null;
+      const msg = await ctx.reply('🆕 Yangi kategoriya nomini ovozli yoki matn shaklida yuboring:');
+      ctx.session.lastBotPromptId = msg.message_id;
+      this.voiceHandler.pushTransient(ctx, msg.message_id);
+      return;
+    }
+
+    // Yangi kategoriyani tasdiqlash
+    if (data === 'confirm_newcat') {
+      return this.voiceHandler.createConfirmedCategory(ctx);
     }
 
     // Tranzaksiya o'chirish
     if (data.startsWith('delete_tx:')) {
       const txId = parseInt(data.split(':')[1]);
       const userId = await this.getUserId(ctx);
-      if (userId) {
-        await this.transactions.remove(txId, userId, 'OWNER');
-        return ctx.editMessageText('🗑 Tranzaksiya o\'chirildi');
+      if (!userId) return;
+
+      await this.transactions.remove(txId, userId, 'OWNER');
+
+      const chatId = ctx.chat?.id ?? ctx.from?.id;
+      await this.voiceHandler.cleanupTransients(ctx);
+      const userMsgId: number | null = ctx.session.lastUserMsgId;
+      if (userMsgId) {
+        await ctx.api.deleteMessage(chatId, userMsgId).catch(() => {});
+        ctx.session.lastUserMsgId = null;
       }
+
+      await ctx.editMessageText('🗑 Tranzaksiya o\'chirildi');
+      const txMsgId = ctx.callbackQuery?.message?.message_id;
+
+      setTimeout(() => {
+        if (txMsgId) {
+          ctx.api.deleteMessage(chatId, txMsgId).catch(() => {});
+        }
+      }, 2000);
+      return;
     }
 
     // Tranzaksiya tahrirlash — menyu
@@ -181,11 +211,47 @@ export class CallbackHandler {
           kb.text(name, `edit_cat:${c.id}:${txId}`);
           if ((i + 1) % 2 === 0) kb.row();
         });
+        kb.row().text('🆕 Yangi nom bilan yaratish', 'edit_newcat_input');
         await ctx.answerCallbackQuery();
         const msg = await ctx.reply('🏷 Yangi kategoriyani tanlang:', { reply_markup: kb });
         ctx.session.lastBotPromptId = msg.message_id;
+        this.voiceHandler.pushTransient(ctx, msg.message_id);
         return;
       }
+    }
+
+    // Tahrirlash uchun yangi kategoriya nomi
+    if (data === 'edit_newcat_input') {
+      ctx.session.awaitingField = 'edit_category_new_input';
+      ctx.session.pendingNewCatHint = null;
+      await ctx.answerCallbackQuery();
+      const msg = await ctx.reply('🆕 Yangi kategoriya nomini ovozli yoki matn shaklida yuboring:');
+      ctx.session.lastBotPromptId = msg.message_id;
+      this.voiceHandler.pushTransient(ctx, msg.message_id);
+      return;
+    }
+
+    // Tahrirlash uchun yangi kategoriyani tasdiqlash
+    if (data === 'edit_confirm_newcat') {
+      const txId = ctx.session.editingTxId;
+      const hint = ctx.session.pendingNewCatHint;
+      const wsId = ctx.session.activeWorkspaceId;
+      if (!txId || !hint || !wsId) return ctx.reply('❌ Xatolik');
+
+      const tx = await this.transactions.findOne(txId);
+      if (!tx) return;
+
+      const newCat = await this.categories.createFromHint(hint, wsId, tx.type as any);
+      await this.transactions.update(txId, await this.getUserId(ctx) ?? 0, 'OWNER', {
+        categoryId: newCat.id,
+      } as any);
+
+      ctx.session.pendingNewCatHint = null;
+      ctx.session.awaitingField = null;
+      ctx.session.editingTxId = null;
+      await this.voiceHandler.cleanupTransients(ctx);
+      await this.cleanupAndShowUpdated(ctx, txId, null);
+      return;
     }
 
     // Tahrirlash — kategoriya saqlash
@@ -208,7 +274,14 @@ export class CallbackHandler {
     if (data === 'cancel') {
       ctx.session.pendingTx = null;
       ctx.session.awaitingField = null;
-      return ctx.reply(t(lang, 'btn_cancel'));
+      ctx.session.pendingNewCatHint = null;
+      await this.voiceHandler.cleanupTransients(ctx);
+      ctx.session.lastBotPromptId = null;
+      const m = await ctx.reply(t(lang, 'btn_cancel'));
+      setTimeout(() => {
+        ctx.api.deleteMessage(ctx.chat?.id ?? ctx.from?.id, m.message_id).catch(() => {});
+      }, 1500);
+      return;
     }
 
     // Til tanlash

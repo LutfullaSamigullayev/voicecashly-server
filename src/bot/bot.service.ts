@@ -1,6 +1,6 @@
 import { Injectable, OnModuleInit } from '@nestjs/common';
 import { Bot, session } from 'grammy';
-import { run, RunnerHandle } from '@grammyjs/runner';
+import { run, RunnerHandle, sequentialize } from '@grammyjs/runner';
 import { CommandHandler } from './handlers/command.handler';
 import { VoiceHandler } from './handlers/voice.handler';
 import { TextHandler } from './handlers/text.handler';
@@ -14,8 +14,11 @@ export interface SessionData {
   lastTxId: number | null;
   lastTxMessageId: number | null;
   lastBotPromptId: number | null;
+  lastUserMsgId: number | null;
   editingTxId: number | null;
   pendingTeamName: string | null;
+  transientMsgIds: number[];
+  pendingNewCatHint: string | null;
 }
 
 @Injectable()
@@ -31,6 +34,12 @@ export class BotService implements OnModuleInit {
   ) {
     this.bot = new Bot(process.env.BOT_TOKEN!);
 
+    this.bot.use(sequentialize((ctx) => {
+      const chat = ctx.chat?.id?.toString();
+      const user = ctx.from?.id?.toString();
+      return [chat, user].filter(Boolean) as string[];
+    }));
+
     this.bot.use(session({
       initial: (): SessionData => ({
         lang: 'uz',
@@ -40,8 +49,11 @@ export class BotService implements OnModuleInit {
         lastTxId: null,
         lastTxMessageId: null,
         lastBotPromptId: null,
+        lastUserMsgId: null,
         editingTxId: null,
         pendingTeamName: null,
+        transientMsgIds: [],
+        pendingNewCatHint: null,
       }),
     }));
 
