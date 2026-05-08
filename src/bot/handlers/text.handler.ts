@@ -69,9 +69,11 @@ export class TextHandler {
     // Tahrirlash — izoh
     if (awaiting === 'edit_note') {
       const txId = ctx.session.editingTxId;
-      await this.transactions.update(txId, 0, 'OWNER', {
-        noteUz: text, noteRu: text, noteEn: text,
-      } as any);
+      const noteUpdate: any = {};
+      if (lang === 'uz') noteUpdate.noteUz = text;
+      else if (lang === 'ru') noteUpdate.noteRu = text;
+      else noteUpdate.noteEn = text;
+      await this.transactions.update(txId, 0, 'OWNER', noteUpdate);
       ctx.session.awaitingField = null;
       ctx.session.editingTxId = null;
       return this.callbackHandler.cleanupAndShowUpdated(ctx, txId, userMsgId);

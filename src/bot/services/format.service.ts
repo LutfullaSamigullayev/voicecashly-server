@@ -38,7 +38,7 @@ export function formatReport(lang: 'uz' | 'ru' | 'en', data: any): string {
 
 export function formatTransaction(
   lang: 'uz' | 'ru' | 'en',
-  tx: { type: string; category: any; amount: number; currency: string; exchangeRate?: number; amountUzs?: number; date: Date },
+  tx: { type: string; category: any; amount: number; currency: string; exchangeRate?: number; amountUzs?: number; date: Date; note?: string | null },
 ): string {
   const n = (v: number) => v.toLocaleString('uz-UZ');
   const dateStr = tx.date.toLocaleDateString(lang === 'ru' ? 'ru-RU' : lang === 'en' ? 'en-US' : 'uz-UZ', {
@@ -47,6 +47,7 @@ export function formatTransaction(
 
   const catName = lang === 'uz' ? tx.category.nameUz : lang === 'ru' ? tx.category.nameRu : tx.category.nameEn;
   const typeIcon = tx.type === 'INCOME' ? '📈' : '📉';
+  const note = tx.note?.trim();
 
   const templates = {
     uz: [
@@ -56,6 +57,7 @@ export function formatTransaction(
       `💰 Miqdor:     ${tx.currency === 'USD' ? `$${tx.amount}` : `${n(tx.amount)} so'm`}`,
       tx.currency === 'USD' && tx.amountUzs ? `💱 Kurs:       1 USD = ${n(tx.exchangeRate ?? 0)} so'm` : '',
       tx.currency === 'USD' && tx.amountUzs ? `            ≈ ${n(tx.amountUzs)} so'm` : '',
+      note ? `📝 Izoh:       ${note}` : '',
       `📅 Sana:       ${dateStr}`,
     ].filter(Boolean).join('\n'),
     ru: [
@@ -65,6 +67,7 @@ export function formatTransaction(
       `💰 Сумма:      ${tx.currency === 'USD' ? `$${tx.amount}` : `${n(tx.amount)} сум`}`,
       tx.currency === 'USD' && tx.amountUzs ? `💱 Курс:       1 USD = ${n(tx.exchangeRate ?? 0)} сум` : '',
       tx.currency === 'USD' && tx.amountUzs ? `            ≈ ${n(tx.amountUzs)} сум` : '',
+      note ? `📝 Заметка:    ${note}` : '',
       `📅 Дата:       ${dateStr}`,
     ].filter(Boolean).join('\n'),
     en: [
@@ -74,6 +77,7 @@ export function formatTransaction(
       `💰 Amount:     ${tx.currency === 'USD' ? `$${tx.amount}` : `${n(tx.amount)} UZS`}`,
       tx.currency === 'USD' && tx.amountUzs ? `💱 Rate:       1 USD = ${n(tx.exchangeRate ?? 0)} UZS` : '',
       tx.currency === 'USD' && tx.amountUzs ? `            ≈ ${n(tx.amountUzs)} UZS` : '',
+      note ? `📝 Note:       ${note}` : '',
       `📅 Date:       ${dateStr}`,
     ].filter(Boolean).join('\n'),
   };

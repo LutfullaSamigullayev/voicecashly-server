@@ -104,9 +104,11 @@ export class VoiceHandler {
     if (awaiting === 'edit_note') {
       const text = await this.gemini.transcribeVoice(audioBuffer, 'audio/ogg', lang);
       if (!text) return ctx.reply(t(lang, 'not_understood'));
-      await this.transactions.update(txId, 0, 'OWNER', {
-        noteUz: text, noteRu: text, noteEn: text,
-      } as any);
+      const noteUpdate: any = {};
+      if (lang === 'uz') noteUpdate.noteUz = text;
+      else if (lang === 'ru') noteUpdate.noteRu = text;
+      else noteUpdate.noteEn = text;
+      await this.transactions.update(txId, 0, 'OWNER', noteUpdate);
       ctx.session.awaitingField = null;
       ctx.session.editingTxId = null;
       return this.refreshEditedTransaction(ctx, txId);
@@ -152,6 +154,7 @@ export class VoiceHandler {
     const tx = await this.transactions.findOne(txId);
     if (!tx) return;
 
+    const note = lang === 'uz' ? tx.noteUz : lang === 'ru' ? tx.noteRu : tx.noteEn;
     const formatted = formatTransaction(lang, {
       type: tx.type,
       category: tx.category,
@@ -160,6 +163,7 @@ export class VoiceHandler {
       exchangeRate: tx.exchangeRate ? Number(tx.exchangeRate) : undefined,
       amountUzs: tx.amountUzs ? Number(tx.amountUzs) : undefined,
       date: tx.date,
+      note,
     });
 
     const sentMsg = await ctx.reply(formatted, {
@@ -428,6 +432,7 @@ export class VoiceHandler {
       ctx.session.lastBotPromptId = null;
     }
 
+    const note = lang === 'uz' ? tx.noteUz : lang === 'ru' ? tx.noteRu : tx.noteEn;
     const formatted = formatTransaction(lang, {
       type: tx.type,
       category: tx.category,
@@ -436,6 +441,7 @@ export class VoiceHandler {
       exchangeRate: exchangeRate,
       amountUzs: amountUzs,
       date: tx.date,
+      note,
     });
 
     const sentMsg = await ctx.reply(formatted, {

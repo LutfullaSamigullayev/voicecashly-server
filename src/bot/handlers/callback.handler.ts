@@ -426,6 +426,7 @@ export class CallbackHandler {
     const tx = await this.transactions.findOne(txId);
     if (!tx) return;
 
+    const note = lang === 'uz' ? tx.noteUz : lang === 'ru' ? tx.noteRu : tx.noteEn;
     const formatted = formatTransaction(lang, {
       type: tx.type,
       category: tx.category,
@@ -434,6 +435,7 @@ export class CallbackHandler {
       exchangeRate: tx.exchangeRate ? Number(tx.exchangeRate) : undefined,
       amountUzs: tx.amountUzs ? Number(tx.amountUzs) : undefined,
       date: tx.date,
+      note,
     });
 
     const sentMsg = await ctx.reply(formatted, {
