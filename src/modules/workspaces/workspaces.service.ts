@@ -1,6 +1,6 @@
 import { Injectable, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../shared/prisma/prisma.service';
-import { defaultCategories } from '../../../prisma/seed';
+import { defaultCategories } from '../../shared/default-categories';
 
 @Injectable()
 export class WorkspacesService {
