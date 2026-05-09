@@ -74,12 +74,17 @@ export class VoiceHandler {
       await this.processIntent(ctx, intent);
       await cleanupProcessing();
     } catch (err: any) {
-      console.error('Voice handler error:', err);
-      const status = err?.status;
+      console.error('Voice handler error:', {
+        status: err?.status ?? err?.response?.status,
+        message: err?.message,
+        stack: err?.stack?.split('\n').slice(0, 3).join('\n'),
+      });
+      const status = err?.status ?? err?.response?.status;
       const msg = String(err?.message ?? '');
-      const isOverloaded = status === 503 || status === 429 || status === 500 || status === 502 || status === 504
-        || msg.includes('overloaded') || msg.includes('Service Unavailable') || msg.includes('quota');
-      await ctx.reply(t(lang, isOverloaded ? 'ai_overloaded' : 'not_understood'));
+      const isAiError = (status && status >= 400)
+        || msg.includes('overloaded') || msg.includes('Service Unavailable')
+        || msg.includes('quota') || msg.includes('API key') || msg.includes('PERMISSION');
+      await ctx.reply(t(lang, isAiError ? 'ai_overloaded' : 'not_understood'));
       await cleanupProcessing();
     }
   }

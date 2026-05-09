@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 
 export interface Intent {
@@ -138,8 +138,19 @@ Aytilmagan → null
 
 @Injectable()
 export class GeminiService {
-  private genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
+  private readonly logger = new Logger(GeminiService.name);
+  private genAI: GoogleGenerativeAI;
   private models = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-2.5-flash-lite'];
+
+  constructor() {
+    const key = process.env.GEMINI_API_KEY;
+    if (!key) {
+      this.logger.error('GEMINI_API_KEY env variable is missing or empty!');
+    } else {
+      this.logger.log(`Gemini initialized (key length=${key.length})`);
+    }
+    this.genAI = new GoogleGenerativeAI(key ?? '');
+  }
 
   async processVoice(audioBuffer: Buffer, mimeType = 'audio/ogg', lang: 'uz' | 'ru' | 'en' = 'uz'): Promise<Intent> {
     const audioPart = { inlineData: { data: audioBuffer.toString('base64'), mimeType } };
@@ -185,6 +196,23 @@ Misollar:
     }
   }
 
+  private shouldFallback(err: any): boolean {
+    const status = err?.status ?? err?.response?.status;
+    const msg = String(err?.message ?? '').toLowerCase();
+    if (status === 429 || status === 503 || (status >= 500 && status < 600)) return true;
+    if (status === 404) return true;
+    if (msg.includes('not found') || msg.includes('not supported') || msg.includes('overloaded')) {
+      return true;
+    }
+    return false;
+  }
+
+  private logGeminiError(modelName: string, err: any) {
+    const status = err?.status ?? err?.response?.status;
+    const msg = err?.message ?? String(err);
+    this.logger.error(`Gemini ${modelName} failed: status=${status} message=${msg}`);
+  }
+
   private async generateJSON(contents: any[]): Promise<string> {
     let lastErr: any;
     for (const modelName of this.models) {
@@ -197,11 +225,8 @@ Misollar:
         return result.response.text();
       } catch (err: any) {
         lastErr = err;
-        const status = err?.status ?? err?.response?.status;
-        if (status === 429 || status === 503 || (status >= 500 && status < 600)) {
-          console.warn(`Gemini ${modelName} ${status}, fallback...`);
-          continue;
-        }
+        this.logGeminiError(modelName, err);
+        if (this.shouldFallback(err)) continue;
         throw err;
       }
     }
@@ -220,11 +245,8 @@ Misollar:
         return result.response.text().trim();
       } catch (err: any) {
         lastErr = err;
-        const status = err?.status ?? err?.response?.status;
-        if (status === 429 || status === 503 || (status >= 500 && status < 600)) {
-          console.warn(`Gemini ${modelName} ${status}, fallback...`);
-          continue;
-        }
+        this.logGeminiError(modelName, err);
+        if (this.shouldFallback(err)) continue;
         throw err;
       }
     }
@@ -235,7 +257,8 @@ Misollar:
     try {
       const parsed: any = JSON.parse(raw.replace(/```json|```/g, '').trim());
       return this.normalizeIntent(parsed);
-    } catch {
+    } catch (err) {
+      this.logger.warn(`Intent JSON parse failed. Raw response: ${raw?.slice(0, 500)}`);
       return this.normalizeIntent({});
     }
   }
