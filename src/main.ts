@@ -12,6 +12,10 @@ async function bootstrap() {
   app.useGlobalPipes(new ValidationPipe({ whitelist: true, transform: true }));
   app.enableCors();
 
+  const httpAdapter = app.getHttpAdapter();
+  httpAdapter.get('/', (_req: any, res: any) => res.json({ status: 'ok' }));
+  httpAdapter.get('/health', (_req: any, res: any) => res.json({ status: 'ok' }));
+
   const port = process.env.PORT ?? 3001;
   await app.listen(port);
   console.log(`Server running on port ${port}`);
