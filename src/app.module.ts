@@ -10,6 +10,7 @@ import { BudgetsModule } from './modules/budgets/budgets.module';
 import { WorkspacesModule } from './modules/workspaces/workspaces.module';
 import { ExchangeRatesModule } from './modules/exchange-rates/exchange-rates.module';
 import { BotModule } from './bot/bot.module';
+import { KeepAliveService } from './shared/keep-alive/keep-alive.service';
 
 @Module({
   imports: [
@@ -25,5 +26,6 @@ import { BotModule } from './bot/bot.module';
     ExchangeRatesModule,
     BotModule,
   ],
+  providers: [KeepAliveService],
 })
 export class AppModule {}
