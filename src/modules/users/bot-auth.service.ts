@@ -13,7 +13,8 @@ export class BotAuthService {
   ) {}
 
   async start(): Promise<{ token: string; deepLink: string; expiresAt: Date }> {
-    const token = randomBytes(24).toString('hex');
+    // We use 16 bytes (32 hex chars) to ensure callback_data stays under Telegram's 64 byte limit
+    const token = randomBytes(16).toString('hex');
     const expiresAt = new Date(Date.now() + TOKEN_TTL_MS);
 
     await this.prisma.loginToken.create({
