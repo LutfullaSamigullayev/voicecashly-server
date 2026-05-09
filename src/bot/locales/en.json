@@ -83,5 +83,10 @@
   "cannot_delete_only_ws": "❌ Cannot delete your only account. Create a new one first.",
   "only_team_invite": "❌ Invites are for team accounts only. Create a team account via /start.",
   "invite_invalid": "❌ Invite link is invalid or expired.",
-  "joined_workspace": "✅ You joined the team \"{{name}}\"!\n\nSend a voice or text message."
+  "joined_workspace": "✅ You joined the team \"{{name}}\"!\n\nSend a voice or text message.",
+  "weblogin_prompt": "🌐 Confirm login to voicecashly.vercel.app?",
+  "weblogin_btn_confirm": "✅ Yes, log in",
+  "weblogin_confirmed": "✅ Login confirmed! Return to the website.",
+  "weblogin_expired": "❌ Login expired. Try again on the website.",
+  "weblogin_cancelled": "❌ Cancelled"
 }

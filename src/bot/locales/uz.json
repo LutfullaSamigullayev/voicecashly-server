@@ -83,5 +83,10 @@
   "cannot_delete_only_ws": "❌ Yagona hisobni o'chirib bo'lmaydi. Avval yangi hisob yarating.",
   "only_team_invite": "❌ Faqat jamoa hisobi uchun invite mumkin. Avval /start orqali jamoa hisobi yarating.",
   "invite_invalid": "❌ Invite link noto'g'ri yoki muddati o'tgan.",
-  "joined_workspace": "✅ \"{{name}}\" jamoasiga qo'shildingiz!\n\nOvozli yoki matnli xabar yuboring."
+  "joined_workspace": "✅ \"{{name}}\" jamoasiga qo'shildingiz!\n\nOvozli yoki matnli xabar yuboring.",
+  "weblogin_prompt": "🌐 voicecashly.vercel.app saytiga kirishni tasdiqlaysizmi?",
+  "weblogin_btn_confirm": "✅ Ha, kirish",
+  "weblogin_confirmed": "✅ Kirish tasdiqlandi! Saytga qayting.",
+  "weblogin_expired": "❌ Login muddati o'tgan. Saytdan qayta urining.",
+  "weblogin_cancelled": "❌ Bekor qilindi"
 }

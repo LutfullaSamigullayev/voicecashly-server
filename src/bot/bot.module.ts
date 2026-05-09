@@ -12,6 +12,7 @@ import { TransactionsModule } from '../modules/transactions/transactions.module'
 import { ExchangeRatesModule } from '../modules/exchange-rates/exchange-rates.module';
 import { BudgetsModule } from '../modules/budgets/budgets.module';
 import { WorkspacesModule } from '../modules/workspaces/workspaces.module';
+import { UsersModule } from '../modules/users/users.module';
 
 @Module({
   imports: [
@@ -20,6 +21,7 @@ import { WorkspacesModule } from '../modules/workspaces/workspaces.module';
     ExchangeRatesModule,
     BudgetsModule,
     WorkspacesModule,
+    UsersModule,
   ],
   providers: [
     BotService,

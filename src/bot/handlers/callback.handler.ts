@@ -4,6 +4,7 @@ import { PrismaService } from '../../shared/prisma/prisma.service';
 import { WorkspacesService } from '../../modules/workspaces/workspaces.service';
 import { CategoriesService } from '../../modules/categories/categories.service';
 import { TransactionsService } from '../../modules/transactions/transactions.service';
+import { BotAuthService } from '../../modules/users/bot-auth.service';
 import { VoiceHandler } from './voice.handler';
 import { formatTransaction } from '../services/format.service';
 import { t } from './command.handler';
@@ -17,6 +18,7 @@ export class CallbackHandler {
     private readonly categories: CategoriesService,
     private readonly transactions: TransactionsService,
     private readonly voiceHandler: VoiceHandler,
+    private readonly botAuth: BotAuthService,
   ) {}
 
   register(bot: Bot<any>) {
@@ -28,6 +30,24 @@ export class CallbackHandler {
     const lang = ctx.session?.lang ?? 'uz';
 
     await ctx.answerCallbackQuery().catch(() => {});
+
+    // Web login confirm/cancel
+    if (data.startsWith('weblogin:')) {
+      const [, action, token] = data.split(':');
+      if (action === 'cancel') {
+        return ctx.editMessageText(t(lang, 'weblogin_cancelled'));
+      }
+      if (action === 'confirm') {
+        const userId = await this.getUserId(ctx);
+        if (!userId) return ctx.editMessageText(t(lang, 'error_generic'));
+        try {
+          await this.botAuth.confirm(token, userId);
+          return ctx.editMessageText(t(lang, 'weblogin_confirmed'));
+        } catch {
+          return ctx.editMessageText(t(lang, 'weblogin_expired'));
+        }
+      }
+    }
 
     // /start birinchi marta — til tanlash
     if (data.startsWith('startlang:')) {

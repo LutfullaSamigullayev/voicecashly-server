@@ -155,6 +155,23 @@ model Budget {
   @@unique([workspaceId, categoryId, month, year])
 }
 
+// ─── Bot orqali web login token ──────────────────────────────────
+model LoginToken {
+  id        Int              @id @default(autoincrement())
+  token     String           @unique
+  userId    Int?
+  status    LoginTokenStatus @default(PENDING)
+  expiresAt DateTime
+  createdAt DateTime         @default(now())
+
+  @@index([token])
+}
+
+enum LoginTokenStatus {
+  PENDING
+  CONFIRMED
+}
+
 // ─── Valyuta kurslari ────────────────────────────────────────────
 model ExchangeRate {
   id   Int      @id @default(autoincrement())

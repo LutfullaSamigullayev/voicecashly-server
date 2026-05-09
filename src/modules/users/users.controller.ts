@@ -1,14 +1,29 @@
-import { Controller, Get, Post, Patch, Body, Req, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Body, Req, UseGuards, Query } from '@nestjs/common';
 import { UsersService } from './users.service';
+import { BotAuthService } from './bot-auth.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 
 @Controller()
 export class UsersController {
-  constructor(private readonly usersService: UsersService) {}
+  constructor(
+    private readonly usersService: UsersService,
+    private readonly botAuth: BotAuthService,
+  ) {}
 
   @Post('auth/telegram')
   async telegramLogin(@Body() body: Record<string, string>) {
     return this.usersService.loginWithTelegram(body);
+  }
+
+  @Post('auth/bot/start')
+  async botAuthStart() {
+    return this.botAuth.start();
+  }
+
+  @Get('auth/bot/check')
+  async botAuthCheck(@Query('token') token: string) {
+    if (!token) return { status: 'expired' };
+    return this.botAuth.check(token);
   }
 
   @UseGuards(JwtAuthGuard)

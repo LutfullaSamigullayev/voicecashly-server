@@ -40,11 +40,11 @@ export class CommandHandler {
 
   private async handleStart(ctx: any) {
     const param = ctx.match;
+    const lang = ctx.session?.lang ?? 'uz';
 
     // Invite orqali kirish: /start join_XXXXXX
     if (typeof param === 'string' && param.startsWith('join_')) {
       const inviteCode = param.slice(5);
-      const lang = ctx.session?.lang ?? 'uz';
       const userId = await this.getUserId(ctx);
       if (!userId) return ctx.reply(t(lang, 'error_generic'));
 
@@ -55,6 +55,25 @@ export class CommandHandler {
       } catch {
         return ctx.reply(t(lang, 'invite_invalid'));
       }
+    }
+
+    // Web login orqali kirish: /start login_<token>
+    if (typeof param === 'string' && param.startsWith('login_')) {
+      const token = param.slice(6);
+      const userId = await this.getUserId(ctx);
+      if (!userId) return ctx.reply(t(lang, 'error_generic'));
+
+      const row = await this.prisma.loginToken.findUnique({ where: { token } });
+      if (!row || row.expiresAt < new Date()) {
+        return ctx.reply(t(lang, 'weblogin_expired'));
+      }
+
+      return ctx.reply(t(lang, 'weblogin_prompt'), {
+        reply_markup: new InlineKeyboard()
+          .text(t(lang, 'weblogin_btn_confirm'), `weblogin:confirm:${token}`)
+          .row()
+          .text(t(lang, 'btn_cancel'), `weblogin:cancel:${token}`),
+      });
     }
 
     return ctx.reply(
