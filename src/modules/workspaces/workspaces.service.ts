@@ -57,10 +57,28 @@ export class WorkspacesService {
   }
 
   async getUserWorkspaces(userId: number) {
-    return this.prisma.workspaceMember.findMany({
+    const members = await this.prisma.workspaceMember.findMany({
       where: { userId },
       include: { workspace: { include: { settings: true } } },
     });
+
+    if (members.length <= 1) return members;
+
+    const latestTx = await this.prisma.transaction.findFirst({
+      where: { userId, workspaceId: { in: members.map(m => m.workspaceId) } },
+      orderBy: { date: 'desc' },
+      select: { workspaceId: true },
+    });
+
+    if (latestTx) {
+      const idx = members.findIndex(m => m.workspaceId === latestTx.workspaceId);
+      if (idx > 0) {
+        const [active] = members.splice(idx, 1);
+        members.unshift(active);
+      }
+    }
+
+    return members;
   }
 
   async getWorkspace(workspaceId: number, userId: number) {
