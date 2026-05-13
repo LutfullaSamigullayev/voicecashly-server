@@ -38,7 +38,7 @@ export class BotAuthService {
     });
   }
 
-  async check(token: string): Promise<{ status: 'pending' | 'confirmed' | 'expired'; jwt?: string; user?: any }> {
+  async check(token: string): Promise<{ status: 'pending' | 'confirmed' | 'expired'; jwt?: string; user?: any; activeWorkspaceId?: number }> {
     const row = await this.prisma.loginToken.findUnique({ where: { token } });
     if (!row) return { status: 'expired' };
     if (row.expiresAt < new Date()) {
@@ -53,10 +53,30 @@ export class BotAuthService {
     });
     if (!user) return { status: 'expired' };
 
+    if (user.workspaces.length > 1) {
+      const latestTx = await this.prisma.transaction.findFirst({
+        where: {
+          userId: row.userId,
+          workspaceId: { in: user.workspaces.map(w => w.workspaceId) },
+        },
+        orderBy: { date: 'desc' },
+        select: { workspaceId: true },
+      });
+
+      if (latestTx) {
+        const idx = user.workspaces.findIndex(w => w.workspaceId === latestTx.workspaceId);
+        if (idx > 0) {
+          const [active] = user.workspaces.splice(idx, 1);
+          user.workspaces.unshift(active);
+        }
+      }
+    }
+
+    const activeWorkspaceId = user.workspaces[0]?.workspaceId;
     const jwt = this.jwt.sign({ sub: user.id, tid: user.telegramId.toString() });
 
     await this.prisma.loginToken.delete({ where: { token } }).catch(() => {});
 
-    return { status: 'confirmed', jwt, user };
+    return { status: 'confirmed', jwt, user, activeWorkspaceId };
   }
 }
