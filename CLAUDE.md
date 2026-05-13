@@ -6,7 +6,7 @@ Bu fayl Claude Code (claude.ai/code) uchun **backend** kodi bilan ishlash bo'yic
 
 **VoiceCashly backend** — NestJS asosida qurilgan ovozli moliyaviy boshqaruv server. Foydalanuvchi Telegram orqali ovoz yoki matn yuboradi → Gemini AI niyatni tushunadi → tranzaksiya saqlanadi → web dashboard'da ko'rinadi.
 
-**Stack:** NestJS 10 · Prisma 5 · PostgreSQL (Supabase) · grammY · Google Gemini AI · JWT  
+**Stack:** NestJS 10 · Prisma 5 · PostgreSQL (Supabase) · grammY + @grammyjs/runner · Google Gemini AI · JWT
 **Deploy:** Render (backend) · Supabase (DB)
 
 ---
@@ -40,6 +40,8 @@ npx prisma studio                       # DB ko'rish uchun GUI
 
 Deploy bo'lgach Render dashboard'da `WEBHOOK_URL` env var'ini Render URL'iga o'rnating (masalan: `https://voicecashly-server.onrender.com`). Shu bilan bot polling'dan webhook rejimiga o'tadi.
 
+> **Render free tier sovuq start:** 15 daqiqa harakatsizlikdan keyin xizmat to'xtaydi. `KeepAliveService` (`@Cron('*/14 * * * *')`) har 14 daqiqada o'zini ping qilib turadi (`RENDER_EXTERNAL_URL` yoki hardkodlangan URL). Frontend tomonida ham sahifa yuklanganda warm-up ping yuboradi.
+
 ---
 
 ## Environment Variables
@@ -51,9 +53,11 @@ Deploy bo'lgach Render dashboard'da `WEBHOOK_URL` env var'ini Render URL'iga o'r
 | `DATABASE_URL` | Supabase PostgreSQL pooled ulanishi (runtime uchun) |
 | `DIRECT_URL` | Migratsiya uchun Supabase direct ulanishi |
 | `BOT_TOKEN` | @BotFather'dan olingan Telegram bot tokeni |
+| `BOT_USERNAME` | Bot username (`@`-siz), invite link yaratish va `bot-auth` deep link uchun. Default: `VoiceCashlyBot` |
 | `WEBHOOK_URL` | Server public URL'i — local uchun bo'sh qoldiring (polling rejimi) |
+| `RENDER_EXTERNAL_URL` | Render avtomatik to'ldiradi, `KeepAliveService` shuni ping qiladi |
 | `GEMINI_API_KEY` | aistudio.google.com'dan olingan kalit |
-| `JWT_SECRET` | Min 32 belgi, JWT imzolash uchun |
+| `JWT_SECRET` | Min 32 belgi, JWT imzolash uchun (TTL: 30 kun) |
 
 > Render'da `PORT` o'rnatmang — u avtomatik inject qilinadi.
 
@@ -65,14 +69,22 @@ Deploy bo'lgach Render dashboard'da `WEBHOOK_URL` env var'ini Render URL'iga o'r
 
 ```
 src/
-├── main.ts                    # Bootstrap: ValidationPipe (whitelist+transform), CORS, PORT env'dan
-├── app.module.ts              # Root: ConfigModule (global), ScheduleModule, barcha feature modullar
-├── shared/prisma/             # PrismaService — singleton DB client, hamma joyga inject qilinadi
+├── main.ts                    # Bootstrap: ValidationPipe (whitelist+transform), enableCors() (origin: *), BigInt toJSON, PORT env'dan, GET / va /health
+├── app.module.ts              # Root: ConfigModule (global), ScheduleModule, barcha feature modullar, KeepAliveService provider
+├── shared/
+│   ├── prisma/                # PrismaService — singleton DB client, hamma joyga inject qilinadi
+│   ├── default-categories.ts  # Seed uchun standart 3-tilli kategoriyalar
+│   └── keep-alive/keep-alive.service.ts  # @Cron('*/14 * * * *') — Render free tier sovuq startni oldini olish
 ├── common/
 │   ├── guards/jwt-auth.guard.ts        # Bearer token o'qiydi, req.user = {sub: userId, ...}
 │   └── filters/http-exception.filter.ts
 ├── modules/                   # REST API modullari (har biri service + controller + module)
-│   ├── users/                 # Auth, settings, Telegram login (telegram-auth.service.ts)
+│   ├── users/                 # Auth, settings, Telegram login + web login (bot-auth flow)
+│   │   ├── users.controller.ts          # /auth/telegram, /auth/bot/start, /auth/bot/check, /auth/me, /settings
+│   │   ├── users.service.ts             # loginWithTelegram, findById, updateSettings
+│   │   ├── telegram-auth.service.ts     # Login Widget HMAC verify
+│   │   ├── bot-auth.service.ts          # LoginToken: start/confirm/check (web login orqali bot)
+│   │   └── users.module.ts              # JwtModule.register({ secret, expiresIn: '30d' })
 │   ├── workspaces/            # Personal/team workspace, invite kodlar, rename/delete
 │   ├── categories/            # Workspace bo'yicha kategoriyalar, fuzzy match
 │   ├── transactions/          # CRUD + CSV export, amountUzs normalizatsiya, DTO'lar
@@ -80,15 +92,15 @@ src/
 │   ├── budgets/               # Kategoriya/oy bo'yicha byudjet limit
 │   └── exchange-rates/        # CBU.uz USD/UZS kurslari, har kuni @Cron orqali
 └── bot/
-    ├── bot.module.ts          # Imports: Categories, Transactions, ExchangeRates, Budgets, Workspaces
+    ├── bot.module.ts          # Imports: Categories, Transactions, ExchangeRates, Budgets, Workspaces, Users (BotAuthService uchun)
     ├── bot.controller.ts      # POST /bot/webhook → BotService.handleUpdate()
-    ├── bot.service.ts         # grammY Bot init, session, startup'da setMyCommands
+    ├── bot.service.ts         # grammY Bot init, session (in-memory), @grammyjs/runner orqali concurrent polling, sequentialize per-chat, startup'da setMyCommands
     ├── helpers/
     │   └── commands.ts        # COMMANDS_BY_LANG — bot menyu uchun umumiy komandalar ro'yxati
     ├── handlers/
     │   ├── voice.handler.ts   # Voice yuklab olish → Gemini multimodal → intent flow → save
     │   ├── text.handler.ts    # Matn → Gemini → o'sha intent flow; rename_workspace ham shu yerda
-    │   ├── command.handler.ts # /start (lang+join), /report, /switch, /settings, /lang, /help, /invite
+    │   ├── command.handler.ts # /start (lang+join+weblogin), /report, /switch, /settings, /lang, /help, /invite, /today, /income, /expense, /top, /balance
     │   └── callback.handler.ts # Barcha InlineKeyboard callback'lari (ro'yxat quyida)
     ├── locales/
     │   ├── uz.json            # O'zbek tarjimlari
@@ -99,6 +111,14 @@ src/
         ├── report.service.ts  # getReport(workspaceId, reportType, period) → aggregatsiya
         └── format.service.ts  # formatReport() + formatTransaction() → lokalizatsiyalangan matn
 ```
+
+### Bot Runtime (grammY + @grammyjs/runner)
+
+`bot.service.ts` ikki rejimda ishlaydi:
+- **Polling** (lokal, `WEBHOOK_URL` bo'sh): `@grammyjs/runner` ishlatadi (`run(bot, { runner: { fetch: { allowed_updates } } })`) — concurrent update qabul qilish. Bot start oldidan `deleteWebhook({ drop_pending_updates: true })` chaqiradi.
+- **Webhook** (prod, `WEBHOOK_URL` o'rnatilgan): `setWebhook(`${WEBHOOK_URL}/bot/webhook`)`, `BotController` so'rovlarni `bot.handleUpdate(update)`'ga yo'naltiradi.
+
+`sequentialize` middleware har bir chat/user uchun update'larni ketma-ket bajarib race condition'larni oldini oladi.
 
 ### Ma'lumot oqimi: Voice/Text → Tranzaksiya
 
@@ -118,6 +138,39 @@ User Telegram'da voice/text yuboradi
   → TransactionsService.create() amountUzs normalizatsiya bilan
   → Bot formatTransaction() card + [Bekor] [Tahrirlash] tugmalari bilan javob beradi
 ```
+
+### Web Login Oqimi (LoginToken + bot-auth)
+
+Web frontend `/auth/telegram` (Login Widget) o'rniga **bot-mediated polling flow** ishlatadi:
+
+```
+Frontend                                          Backend                            Bot
+─────────                                         ───────                            ────
+POST /auth/bot/start
+                                          ─►   BotAuthService.start()
+                                               LoginToken: random 16-byte hex
+                                               status=PENDING, expiresAt=now+5min
+                                               deepLink = t.me/<bot>?start=login_<token>
+                                          ◄─   { token, deepLink, expiresAt }
+window.open(deepLink)
+                                                                                    User /start login_<token>
+                                                                                    CommandHandler.handleStart()
+                                                                                    LoginToken topadi, InlineKeyboard:
+                                                                                      [Tasdiqlash] [Bekor qilish]
+                                                                                    callback weblogin:confirm:<token>
+                                                                                    → BotAuthService.confirm(token, userId)
+                                                                                      → LoginToken.status = CONFIRMED, userId set
+poll GET /auth/bot/check?token=...  (every 2s)
+                                          ─►   BotAuthService.check(token)
+                                               status=CONFIRMED → JWT sign({sub,tid})
+                                               token row delete
+                                          ◄─   { status:'confirmed', jwt, user }
+useAuthStore.login(jwt, user)
+setActive(user.workspaces[0])
+navigate('/')
+```
+
+`LoginToken` Prisma modeli: `{ token: unique, userId?: nullable, status: PENDING|CONFIRMED, expiresAt, createdAt }`. TTL 5 daqiqa.
 
 ### Session State (grammY)
 
@@ -140,10 +193,14 @@ User Telegram'da voice/text yuboradi
 
 `awaitingField` qiymatlari: `'amount'` · `'edit_amount'` · `'edit_note'` · `'edit_category'` · `'category_new_input'` · `'edit_category_new_input'` · `'team_name'` · `'rename_workspace'`
 
+> Eslatma: session in-memory (default grammY session). Server qayta ishga tushganda yo'qoladi. Persistence kerak bo'lsa `@grammyjs/storage-*`'ga o'tish kerak.
+
 ### Callback Handler'lar (callback.handler.ts)
 
 | Callback data | Amal |
 |---------------|------|
+| `weblogin:confirm:<token>` | Web login tokenini tasdiqlash, BotAuthService.confirm() |
+| `weblogin:cancel:<token>` | Web login tasdiqlashni bekor qilish (xabarni o'zgartiradi) |
 | `startlang:uz/ru/en` | Tilni saqlash, shu chat uchun setMyCommands, mavjud workspace'lar yoki yaratish menyusi |
 | `start:personal` | Yangi shaxsiy workspace yaratish |
 | `start:team` | Jamoa nomi so'rash |
@@ -181,7 +238,7 @@ User Telegram'da voice/text yuboradi
 /start (parametrsiz)
   → Til tanlash menyusi (uz / ru / en)
   → startlang:<lang> callback
-      → Tilni session + DB'ga saqlash
+      → Tilni session + DB'ga saqlash (UserSettings.language)
       → Bu chat uchun setMyCommands (tanlangan til)
       → Agar mavjud workspace'lar bo'lsa: ro'yxatini ko'rsatish + "Yangi yaratish" tugmasi
       → Yangi foydalanuvchi bo'lsa (workspace yo'q): "Shaxsiy / Jamoa" yaratish menyusi
@@ -190,7 +247,21 @@ User Telegram'da voice/text yuboradi
   → joinByInviteCode(userId, code)
   → activeWorkspaceId = qo'shilgan workspace
   → Tasdiqlash xabari
+
+/start login_<token>   (Web frontend'dan keladi)
+  → LoginToken topiladi, expired bo'lmasligini tekshirish
+  → "Tasdiqlash kerakmi?" InlineKeyboard javob:
+       [✅ Tasdiqlash] [❌ Bekor qilish]
+  → callback weblogin:confirm:<token> → BotAuthService.confirm() → status=CONFIRMED
 ```
+
+### Foydalanuvchi yaratish
+
+User ikki yo'l bilan yaratiladi:
+1. **Bot'da `getUserId(ctx)`** (`command.handler.ts`/`callback.handler.ts`) — Telegram'dan kelgan birinchi xabarda upsert (workspace yaratilmaydi)
+2. **`POST /auth/telegram`** (Telegram Login Widget — hozir frontend ishlatmaydi) — upsert qiladi, workspace yaratilmaydi
+
+> **Diqqat:** workspace **avtomatik yaratilmaydi**. Foydalanuvchi botda `/start` qilib language tanlasagina shaxsiy workspace yaratish menyusi chiqadi. Frontend'da `/onboarding` sahifasi mavjud workspace yo'q bo'lsa ko'rinadi, lekin u faqat botga yo'naltiradi (workspace yaratish tugmasi yo'q).
 
 ### Invite Tizimi
 
@@ -206,15 +277,16 @@ User Telegram'da voice/text yuboradi
 
 ### Commands Menyusi
 
-`bot.service.ts` startup'da 3 til kodi (`uz`, `ru`, `en`) uchun global `setMyCommands` chaqiradi. Foydalanuvchi tilni o'zgartirsa (`/lang` yoki `/start` orqali), shu chat uchun `scope: { type: 'chat', chat_id }` bilan `setMyCommands` qayta chaqiriladi. Umumiy komandalar ro'yxati `src/bot/helpers/commands.ts` da joylashgan.
+`bot.service.ts` `onModuleInit()` da global `setMyCommands` ni 3 til kodi (`uz`, `ru`, `en`) uchun chaqiradi. Foydalanuvchi tilni o'zgartirsa (`/lang` yoki `/start` orqali), shu chat uchun `scope: { type: 'chat', chat_id }` bilan `setMyCommands` qayta chaqiriladi. Umumiy komandalar ro'yxati `src/bot/helpers/commands.ts` da joylashgan.
 
-### Auth oqimi
+### Auth oqimi (REST API)
 
-1. Frontend Telegram Login Widget ko'rsatadi → user Telegram ilovasida tasdiqlaydi
-2. Telegram `{id, first_name, hash, auth_date, ...}` → `POST /auth/telegram`
-3. `TelegramAuthService.verify()` — `BOT_TOKEN` bilan HMAC-SHA256 imzoni tekshiradi, `auth_date` ≤ 3600s
-4. `UsersService.loginWithTelegram()` — User upsert + birinchi login'da personal workspace yaratadi → JWT qaytaradi
-5. Himoyalangan endpointlar `@UseGuards(JwtAuthGuard)` ishlatadi — guard `req.user.sub = userId` qo'yadi
+1. Frontend `POST /auth/bot/start` chaqirib token + deep link oladi (yuqoridagi Web Login oqimi)
+2. Yoki Telegram Login Widget `POST /auth/telegram` (hozir frontend ishlatmaydi):
+   - `TelegramAuthService.verify()` — `BOT_TOKEN` bilan HMAC-SHA256 imzoni tekshiradi, `auth_date` ≤ 3600s
+   - `UsersService.loginWithTelegram()` — User upsert → JWT qaytaradi
+3. JWT `expiresIn: '30d'`, payload: `{ sub: userId, tid: telegramId.toString() }`
+4. Himoyalangan endpointlar `@UseGuards(JwtAuthGuard)` ishlatadi — guard `req.user.sub = userId` qo'yadi
 
 ### Valyuta bilan ishlash
 
@@ -244,15 +316,20 @@ User Telegram'da voice/text yuboradi
 
 Rol `TransactionsService.update/remove()` ichida tekshiriladi — MEMBER boshqa kishining yozuvini o'zgartirsa `ForbiddenException`.
 
+> ⚠️ **Ma'lum bug:** `TransactionsController.update`/`remove` `req.user.sub`'ga `'OWNER'` rolini hardkodlangan tarzda uzatadi (`transactions.controller.ts:67,72`). Bu MEMBER'ning ham boshqalarning yozuvini o'chirishiga ruxsat beradi. Rol guard'i `WorkspaceMember`'dan o'qilishi kerak.
+
 ### Asosiy Prisma modellari
 
 - `Workspace` — `isPersonal: bool`, `inviteCode` (shaxsiy workspace'da null)
-- `Transaction` — `amountUzs` barcha aggregatsiyalarda ishlatiladigan normallashtirilgan maydon; `source` enum: `TELEGRAM | MANUAL | API`
+- `Transaction` — `amountUzs` barcha aggregatsiyalarda ishlatiladigan normallashtirilgan maydon; `source` enum: `TELEGRAM | MANUAL | API`; `recurringId?` — RecurringTransaction bilan bog'liqlik
 - `Category` — workspace bo'yicha, `type: INCOME | EXPENSE | BOTH`, uch tilli nomlar
 - `Budget` — `(workspaceId, categoryId, month, year)` bo'yicha unique
 - `RecurringTransaction` — `frequency: DAILY | WEEKLY | MONTHLY | YEARLY`; workspace bilan `categoryId` orqali bog'liq (to'g'ridan-to'g'ri `workspaceId` maydoni yo'q)
 - `User` — `telegramId: BigInt @unique`, til `Language` enum (UZ/RU/EN) sifatida
 - `ExchangeRate` — `from`/`to`/`rate`/`date`, CBU.uz'dan kuniga olinadi
+- `LoginToken` — `token: unique`, `userId?`, `status: PENDING|CONFIRMED`, `expiresAt`. Web login flow uchun (5 daqiqa TTL)
+
+> `BigInt` (telegramId) JSON'da string sifatida serialize qilinadi (`main.ts`'da `BigInt.prototype.toJSON = function() { return this.toString() }` o'rnatilgan).
 
 ### Gemini AI
 
@@ -265,12 +342,43 @@ Rol `TransactionsService.update/remove()` ichida tekshiriladi — MEMBER boshqa 
 
 ---
 
+## REST API Reference (frontend integratsiyasi uchun)
+
+| Method · Path | Guard | Tavsif |
+|---------------|-------|--------|
+| `GET /` | yo'q | `{ status: 'ok' }` (root health) |
+| `GET /health` | yo'q | `{ status: 'ok' }` |
+| `POST /bot/webhook` | yo'q | grammY update — faqat Telegram chaqiradi |
+| `POST /auth/telegram` | yo'q | Login Widget HMAC verify → JWT |
+| `POST /auth/bot/start` | yo'q | `{ token, deepLink, expiresAt }` — web login boshlash |
+| `GET /auth/bot/check?token=` | yo'q | `{ status: pending|confirmed|expired, jwt?, user? }` |
+| `GET /auth/me` | JWT | Current user + settings + workspaces |
+| `GET /settings` · `PATCH /settings` | JWT | UserSettings |
+| `GET /workspaces/me` | JWT | `WorkspaceMember[]` with `workspace.settings` |
+| `POST /workspaces` | JWT | `{ name, type: 'personal'\|'team' }` |
+| `POST /workspaces/join` | JWT | `{ inviteCode }` |
+| `GET /workspaces/:id` | JWT | Workspace + settings + members.user |
+| `GET /workspaces/:id/invite` | JWT (OWNER) | `{ code }` |
+| `GET /categories?workspaceId=` · CRUD | JWT | Category[] |
+| `GET /transactions?workspaceId=&type=&categoryId=&from=&to=&page=&limit=` | JWT | `{ items, total, page, limit }` |
+| `GET /transactions/summary?workspaceId=&from=&to=` | JWT | `{ income, expense, net }` (amountUzs) |
+| `GET /transactions/export?workspaceId=&from=&to=` | JWT | CSV file |
+| `POST/PATCH/DELETE /transactions[/:id]` | JWT | DTO bilan validatsiya |
+| `GET /analytics/monthly?workspaceId=&months=` | JWT | `MonthlyPoint[]` |
+| `GET /analytics/by-category?workspaceId=&type=&from=&to=` | JWT | Category breakdown |
+| `GET /budgets?workspaceId=&month=&year=` · `GET /budgets/progress` · `POST /budgets` | JWT | |
+| `GET /exchange-rates/latest` | JWT yoki yo'q (controller'da tekshiring) | Latest rates |
+
+> CORS: `main.ts`'da `app.enableCors()` argumentsiz — default `Access-Control-Allow-Origin: *`. Frontend domeni o'zgarsa hech narsa qilish shart emas.
+
+---
+
 ## Konventsiyalar
 
-- **DTO validatsiya:** `class-validator` dekoratorlari + `main.ts`'da global `ValidationPipe({ whitelist: true, transform: true })`. Yangi endpoint qilsangiz DTO yarating.
+- **DTO validatsiya:** `class-validator` dekoratorlari + `main.ts`'da global `ValidationPipe({ whitelist: true, transform: true })`. Yangi endpoint qilsangiz DTO yarating. `@Type(() => Number)` query param raqamlar uchun.
 - **PrismaService** — `shared/prisma/`'dan inject qiling, har bir module'da yangi instance yaratmang.
 - **Auth guard** — barcha himoyalangan endpoint'larga `@UseGuards(JwtAuthGuard)` qo'ying. `req.user.sub` — userId.
 - **Cron joblar** — `@Cron()` dekoratori bilan service ichida; `ScheduleModule.forRoot()` `app.module.ts`'da global yoqilgan.
-- **Bot xatoliklari** — handler ichida tutib oling va lokalizatsiyalangan xabar bilan javob bering, throw qilmang (webhook 500 qaytarmasin).
-- **Pul qiymatlari** — Prisma `Decimal(14, 2)`. JS'da `.toNumber()` faqat ko'rsatish uchun, hisob-kitobda `Decimal` saqlang.
+- **Bot xatoliklari** — handler ichida tutib oling va lokalizatsiyalangan xabar bilan javob bering, throw qilmang (webhook 500 qaytarmasin). `bot.service.ts`'da `bot.catch()` "message is not modified" xatosini jim qiladi.
+- **Pul qiymatlari** — Prisma `Decimal(14, 2)`. JS'da `.toNumber()` faqat ko'rsatish uchun, hisob-kitobda `Decimal` saqlang. Frontend `string` sifatida oladi → `Number()` orqali.
 - **Workspace o'chirish** — cascade delete sxemada yo'q; `WorkspacesService.deleteWorkspace()` tartib bilan o'chiradi: `Transaction.recurringId` nulllash → RecurringTransaction → Budget → Transaction → Category → WorkspaceSettings → WorkspaceMember → Workspace.
