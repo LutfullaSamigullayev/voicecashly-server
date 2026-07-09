@@ -13,4 +13,10 @@ export class WorkspaceAccessService {
     });
     return member?.role ?? null;
   }
+
+  async assertMember(workspaceId: number, userId: number): Promise<Role> {
+    const role = await this.getRole(workspaceId, userId);
+    if (!role) throw new ForbiddenException('Not a member of this workspace');
+    return role;
+  }
 }
