@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { ScheduleModule } from '@nestjs/schedule';
 import { PrismaModule } from './shared/prisma/prisma.module';
+import { WorkspaceAccessModule } from './shared/workspace-access/workspace-access.module';
 import { UsersModule } from './modules/users/users.module';
 import { TransactionsModule } from './modules/transactions/transactions.module';
 import { CategoriesModule } from './modules/categories/categories.module';
@@ -17,6 +18,7 @@ import { KeepAliveService } from './shared/keep-alive/keep-alive.service';
     ConfigModule.forRoot({ isGlobal: true }),
     ScheduleModule.forRoot(),
     PrismaModule,
+    WorkspaceAccessModule,
     UsersModule,
     TransactionsModule,
     CategoriesModule,
