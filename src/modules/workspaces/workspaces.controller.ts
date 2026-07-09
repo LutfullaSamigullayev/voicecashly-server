@@ -43,4 +43,11 @@ export class WorkspacesController {
   async rename(@Req() req: any, @Param('id') id: string, @Body() body: RenameWorkspaceDto) {
     return this.workspacesService.renameWorkspace(+id, req.user.sub, body.name.trim());
   }
+
+  // Faqat OWNER; yagona workspace bo'lsa service xato qaytaradi
+  @Delete(':id')
+  async remove(@Req() req: any, @Param('id') id: string) {
+    await this.workspacesService.deleteWorkspace(+id, req.user.sub);
+    return { ok: true };
+  }
 }
