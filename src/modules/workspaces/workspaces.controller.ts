@@ -1,6 +1,7 @@
-import { Controller, Get, Post, Body, Param, Req, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Delete, Body, Param, Req, UseGuards, BadRequestException } from '@nestjs/common';
 import { WorkspacesService } from './workspaces.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
+import { CreateWorkspaceDto, JoinWorkspaceDto, RenameWorkspaceDto } from './dto/workspace.dto';
 
 @UseGuards(JwtAuthGuard)
 @Controller('workspaces')
@@ -13,15 +14,16 @@ export class WorkspacesController {
   }
 
   @Post()
-  async create(@Req() req: any, @Body() body: { name: string; type: 'personal' | 'team' }) {
+  async create(@Req() req: any, @Body() body: CreateWorkspaceDto) {
     if (body.type === 'personal') {
       return this.workspacesService.createPersonalWorkspace(req.user.sub);
     }
-    return this.workspacesService.createTeamWorkspace(req.user.sub, body.name);
+    if (!body.name?.trim()) throw new BadRequestException('Team name is required');
+    return this.workspacesService.createTeamWorkspace(req.user.sub, body.name.trim());
   }
 
   @Post('join')
-  async join(@Req() req: any, @Body() body: { inviteCode: string }) {
+  async join(@Req() req: any, @Body() body: JoinWorkspaceDto) {
     return this.workspacesService.joinByInviteCode(req.user.sub, body.inviteCode);
   }
 
