@@ -4,4 +4,5 @@ import { PrismaService } from '../prisma/prisma.service';
 
 @Injectable()
 export class WorkspaceAccessService {
+  constructor(private readonly prisma: PrismaService) {}
 }
