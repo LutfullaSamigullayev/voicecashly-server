@@ -3,5 +3,6 @@ import { WorkspaceAccessService } from './workspace-access.service';
 
 @Global()
 @Module({
+  providers: [WorkspaceAccessService],
 })
 export class WorkspaceAccessModule {}
