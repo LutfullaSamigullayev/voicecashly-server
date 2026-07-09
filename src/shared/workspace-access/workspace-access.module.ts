@@ -4,5 +4,6 @@ import { WorkspaceAccessService } from './workspace-access.service';
 @Global()
 @Module({
   providers: [WorkspaceAccessService],
+  exports: [WorkspaceAccessService],
 })
 export class WorkspaceAccessModule {}
