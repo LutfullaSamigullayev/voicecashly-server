@@ -37,4 +37,10 @@ export class WorkspacesController {
     const code = await this.workspacesService.getInviteCode(+id, req.user.sub);
     return { code };
   }
+
+  // OWNER yoki ADMIN — rol tekshiruvi service ichida
+  @Patch(':id')
+  async rename(@Req() req: any, @Param('id') id: string, @Body() body: RenameWorkspaceDto) {
+    return this.workspacesService.renameWorkspace(+id, req.user.sub, body.name.trim());
+  }
 }
