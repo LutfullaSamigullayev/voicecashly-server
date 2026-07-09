@@ -19,4 +19,10 @@ export class WorkspaceAccessService {
     if (!role) throw new ForbiddenException('Not a member of this workspace');
     return role;
   }
+
+  async assertRole(workspaceId: number, userId: number, allowed: Role[]): Promise<Role> {
+    const role = await this.assertMember(workspaceId, userId);
+    if (!allowed.includes(role)) throw new ForbiddenException('Insufficient role');
+    return role;
+  }
 }
