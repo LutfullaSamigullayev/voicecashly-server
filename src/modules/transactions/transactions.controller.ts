@@ -1,6 +1,7 @@
 import { Controller, Get, Post, Patch, Delete, Body, Param, Query, Req, Res, UseGuards } from '@nestjs/common';
 import { TransactionsService } from './transactions.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
+import { WorkspaceMemberGuard } from '../../common/guards/workspace-member.guard';
 import { CreateTransactionDto } from './dto/create-transaction.dto';
 import { UpdateTransactionDto } from './dto/update-transaction.dto';
 import { QueryTransactionDto } from './dto/query-transaction.dto';
@@ -11,6 +12,7 @@ import { Response } from 'express';
 export class TransactionsController {
   constructor(private readonly transactionsService: TransactionsService) {}
 
+  @UseGuards(WorkspaceMemberGuard)
   @Get()
   async findAll(@Query() query: QueryTransactionDto) {
     return this.transactionsService.findAll(query.workspaceId, {
@@ -23,6 +25,7 @@ export class TransactionsController {
     });
   }
 
+  @UseGuards(WorkspaceMemberGuard)
   @Get('summary')
   async summary(
     @Query('workspaceId') workspaceId: string,
@@ -36,6 +39,7 @@ export class TransactionsController {
     );
   }
 
+  @UseGuards(WorkspaceMemberGuard)
   @Get('export')
   async exportCsv(
     @Query('workspaceId') workspaceId: string,
@@ -53,6 +57,7 @@ export class TransactionsController {
     return res.send(csv);
   }
 
+  @UseGuards(WorkspaceMemberGuard)
   @Post()
   async create(@Req() req: any, @Body() body: CreateTransactionDto) {
     return this.transactionsService.create({
@@ -64,11 +69,11 @@ export class TransactionsController {
 
   @Patch(':id')
   async update(@Req() req: any, @Param('id') id: string, @Body() body: UpdateTransactionDto) {
-    return this.transactionsService.update(+id, req.user.sub, 'OWNER', body as any);
+    return this.transactionsService.update(+id, req.user.sub, body);
   }
 
   @Delete(':id')
   async remove(@Req() req: any, @Param('id') id: string) {
-    return this.transactionsService.remove(+id, req.user.sub, 'OWNER');
+    return this.transactionsService.remove(+id, req.user.sub);
   }
 }
