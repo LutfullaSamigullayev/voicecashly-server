@@ -1,5 +1,7 @@
 import { Injectable, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../shared/prisma/prisma.service';
+import { WorkspaceAccessService } from '../../shared/workspace-access/workspace-access.service';
+import { ExchangeRatesService } from '../exchange-rates/exchange-rates.service';
 
 export interface CreateTransactionDto {
   workspaceId: number;
@@ -15,18 +17,48 @@ export interface CreateTransactionDto {
   amountUzs?: number;
 }
 
+export interface UpdateTransactionData {
+  amount?: number;
+  currency?: 'UZS' | 'USD';
+  type?: 'INCOME' | 'EXPENSE';
+  categoryId?: number;
+  note?: string;
+  noteUz?: string;
+  noteRu?: string;
+  noteEn?: string;
+  date?: Date | string;
+}
+
 @Injectable()
 export class TransactionsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly access: WorkspaceAccessService,
+    private readonly exchangeRates: ExchangeRatesService,
+  ) {}
 
   async create(dto: CreateTransactionDto) {
+    const currency = dto.currency ?? 'UZS';
+    let amountUzs = dto.amountUzs;
+    let exchangeRate = dto.exchangeRate ?? null;
+
+    // Bot amountUzs'ni o'zi hisoblab yuboradi; web/API yubormasa shu yerda normallashtiramiz
+    if (amountUzs == null) {
+      if (currency === 'UZS') {
+        amountUzs = dto.amount;
+      } else {
+        exchangeRate = exchangeRate ?? (await this.exchangeRates.getRate(currency, 'UZS'));
+        amountUzs = dto.amount * exchangeRate;
+      }
+    }
+
     return this.prisma.transaction.create({
       data: {
         workspaceId: dto.workspaceId,
         amount: dto.amount,
-        currency: dto.currency ?? 'UZS',
-        amountUzs: dto.amountUzs ?? dto.amount,
-        exchangeRate: dto.exchangeRate ?? null,
+        currency,
+        amountUzs,
+        exchangeRate,
         type: dto.type,
         categoryId: dto.categoryId,
         noteUz: dto.note ?? null,
@@ -48,23 +80,25 @@ export class TransactionsService {
     page?: number;
     limit?: number;
   } = {}) {
-    const { page = 1, limit = 20, ...where } = filters;
+    const { page = 1, limit = 20, ...f } = filters;
     const skip = (page - 1) * limit;
+
+    const where = {
+      workspaceId,
+      ...(f.type && { type: f.type }),
+      ...(f.categoryId && { categoryId: f.categoryId }),
+      ...(f.from || f.to ? { date: { gte: f.from, lte: f.to } } : {}),
+    };
 
     const [items, total] = await Promise.all([
       this.prisma.transaction.findMany({
-        where: {
-          workspaceId,
-          ...(where.type && { type: where.type }),
-          ...(where.categoryId && { categoryId: where.categoryId }),
-          ...(where.from || where.to ? { date: { gte: where.from, lte: where.to } } : {}),
-        },
+        where,
         include: { category: true, user: true },
         orderBy: { date: 'desc' },
         skip,
         take: limit,
       }),
-      this.prisma.transaction.count({ where: { workspaceId } }),
+      this.prisma.transaction.count({ where }),
     ]);
 
     return { items, total, page, limit };
@@ -92,20 +126,60 @@ export class TransactionsService {
     });
   }
 
-  async update(id: number, userId: number, role: string, data: Partial<CreateTransactionDto>) {
-    const tx = await this.prisma.transaction.findUnique({ where: { id } });
-    if (!tx) throw new NotFoundException();
-    if (tx.userId !== userId && role === 'MEMBER') throw new ForbiddenException();
+  async update(id: number, userId: number, data: UpdateTransactionData) {
+    const tx = await this.assertCanModify(id, userId);
 
-    return this.prisma.transaction.update({ where: { id }, data: data as any });
+    const upd: Record<string, unknown> = {};
+    if (data.amount !== undefined) upd.amount = data.amount;
+    if (data.currency !== undefined) upd.currency = data.currency;
+    if (data.type !== undefined) upd.type = data.type;
+    if (data.categoryId !== undefined) upd.categoryId = data.categoryId;
+    if (data.date !== undefined) upd.date = new Date(data.date);
+    if (data.noteUz !== undefined) upd.noteUz = data.noteUz;
+    if (data.noteRu !== undefined) upd.noteRu = data.noteRu;
+    if (data.noteEn !== undefined) upd.noteEn = data.noteEn;
+    // Web "note" yuboradi — create bilan bir xil: uch tilga ham yoziladi
+    if (data.note !== undefined) {
+      upd.noteUz = data.note;
+      upd.noteRu = data.note;
+      upd.noteEn = data.note;
+    }
+
+    // amount yoki currency o'zgarsa amountUzs qayta normallashtiriladi,
+    // aks holda summary/analytics eski qiymat bilan noto'g'ri chiqadi
+    if (data.amount !== undefined || data.currency !== undefined) {
+      const amount = data.amount ?? Number(tx.amount);
+      const currency = data.currency ?? tx.currency;
+      if (currency === 'UZS') {
+        upd.amountUzs = amount;
+        upd.exchangeRate = null;
+      } else {
+        const rate = await this.exchangeRates.getRate('USD', 'UZS');
+        upd.amountUzs = amount * rate;
+        upd.exchangeRate = rate;
+      }
+    }
+
+    return this.prisma.transaction.update({
+      where: { id },
+      data: upd,
+      include: { category: true, user: true },
+    });
   }
 
-  async remove(id: number, userId: number, role: string) {
+  async remove(id: number, userId: number) {
+    await this.assertCanModify(id, userId);
+    return this.prisma.transaction.delete({ where: { id } });
+  }
+
+  // Tranzaksiya egasi hammasini, OWNER/ADMIN boshqalarnikini ham o'zgartira oladi.
+  // Workspace a'zosi bo'lmagan foydalanuvchi umuman kira olmaydi.
+  private async assertCanModify(id: number, userId: number) {
     const tx = await this.prisma.transaction.findUnique({ where: { id } });
     if (!tx) throw new NotFoundException();
+    const role = await this.access.assertMember(tx.workspaceId, userId);
     if (tx.userId !== userId && role === 'MEMBER') throw new ForbiddenException();
-
-    return this.prisma.transaction.delete({ where: { id } });
+    return tx;
   }
 
   async deleteLast(workspaceId: number, userId: number) {
@@ -127,9 +201,17 @@ export class TransactionsService {
       orderBy: { date: 'desc' },
     });
 
+    const esc = (v: string) => (/[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v);
     const header = 'Date,Type,Category,Amount,Currency,Note';
     const rows = items.map(t =>
-      `${t.date.toISOString()},${t.type},${t.category.nameEn},${t.amount},${t.currency},${t.noteEn ?? ''}`,
+      [
+        t.date.toISOString(),
+        t.type,
+        esc(t.category.nameEn),
+        String(t.amount),
+        t.currency,
+        esc(t.noteEn ?? ''),
+      ].join(','),
     );
 
     return [header, ...rows].join('\n');
