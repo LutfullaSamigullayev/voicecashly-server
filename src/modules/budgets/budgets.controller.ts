@@ -1,8 +1,10 @@
-import { Controller, Get, Post, Body, Query, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Body, Query, Req, UseGuards, ForbiddenException } from '@nestjs/common';
 import { BudgetsService } from './budgets.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
+import { WorkspaceMemberGuard } from '../../common/guards/workspace-member.guard';
+import { UpsertBudgetDto } from './dto/upsert-budget.dto';
 
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, WorkspaceMemberGuard)
 @Controller('budgets')
 export class BudgetsController {
   constructor(private readonly budgetsService: BudgetsService) {}
@@ -22,7 +24,10 @@ export class BudgetsController {
   }
 
   @Post()
-  async upsert(@Body() body: { workspaceId: number; categoryId: number; amount: number; currency: string; month: number; year: number }) {
+  async upsert(@Req() req: any, @Body() body: UpsertBudgetDto) {
+    if (req.workspaceRole === 'MEMBER') {
+      throw new ForbiddenException('Only owner or admin can set budgets');
+    }
     return this.budgetsService.upsert(body.workspaceId, body.categoryId, body.amount, body.currency, body.month, body.year);
   }
 }
