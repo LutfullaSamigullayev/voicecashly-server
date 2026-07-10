@@ -2,6 +2,7 @@ import { Controller, Get, Post, Patch, Body, Req, UseGuards, Query } from '@nest
 import { UsersService } from './users.service';
 import { BotAuthService } from './bot-auth.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
+import { UpdateSettingsDto } from './dto/update-settings.dto';
 
 @Controller()
 export class UsersController {
@@ -41,7 +42,7 @@ export class UsersController {
 
   @UseGuards(JwtAuthGuard)
   @Patch('settings')
-  async updateSettings(@Req() req: any, @Body() body: any) {
+  async updateSettings(@Req() req: any, @Body() body: UpdateSettingsDto) {
     return this.usersService.updateSettings(req.user.sub, body);
   }
 }
