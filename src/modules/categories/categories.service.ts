@@ -1,10 +1,14 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../shared/prisma/prisma.service';
+import { WorkspaceAccessService } from '../../shared/workspace-access/workspace-access.service';
 import { Category } from '@prisma/client';
 
 @Injectable()
 export class CategoriesService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly access: WorkspaceAccessService,
+  ) {}
 
   async findAll(workspaceId: number) {
     return this.prisma.category.findMany({
