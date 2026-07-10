@@ -57,7 +57,9 @@ export class TextHandler {
       const amount = parseFloat(text.replace(/[^0-9.]/g, ''));
       if (isNaN(amount)) return ctx.reply(t(lang, 'invalid_amount'));
       const txId = ctx.session.editingTxId;
-      await this.transactions.update(txId, 0, 'OWNER', { amount } as any);
+      const userId = await this.getDbUserId(ctx);
+      if (!userId) return ctx.reply(t(lang, 'error_generic'));
+      await this.transactions.update(txId, userId, { amount });
       ctx.session.awaitingField = null;
       ctx.session.editingTxId = null;
       return this.callbackHandler.cleanupAndShowUpdated(ctx, txId, userMsgId);
@@ -80,11 +82,13 @@ export class TextHandler {
     // Tahrirlash — izoh
     if (awaiting === 'edit_note') {
       const txId = ctx.session.editingTxId;
+      const userId = await this.getDbUserId(ctx);
+      if (!userId) return ctx.reply(t(lang, 'error_generic'));
       const noteUpdate: any = {};
       if (lang === 'uz') noteUpdate.noteUz = text;
       else if (lang === 'ru') noteUpdate.noteRu = text;
       else noteUpdate.noteEn = text;
-      await this.transactions.update(txId, 0, 'OWNER', noteUpdate);
+      await this.transactions.update(txId, userId, noteUpdate);
       ctx.session.awaitingField = null;
       ctx.session.editingTxId = null;
       return this.callbackHandler.cleanupAndShowUpdated(ctx, txId, userMsgId);
