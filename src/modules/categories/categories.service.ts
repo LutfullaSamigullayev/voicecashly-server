@@ -101,4 +101,9 @@ export class CategoriesService {
     await this.assertManager(id, userId);
     return this.update(id, data);
   }
+
+  async removeChecked(id: number, userId: number) {
+    await this.assertManager(id, userId);
+    return this.remove(id);
+  }
 }
