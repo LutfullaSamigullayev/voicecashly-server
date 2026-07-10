@@ -94,4 +94,11 @@ export class CategoriesService {
   async remove(id: number) {
     return this.prisma.category.update({ where: { id }, data: { isArchived: true } });
   }
+
+  // REST uchun: kategoriya qaysi workspace'ga tegishliligini aniqlab,
+  // foydalanuvchi shu workspace'da OWNER/ADMIN ekanini tekshiradi
+  async updateChecked(id: number, userId: number, data: Parameters<CategoriesService['update']>[1]) {
+    await this.assertManager(id, userId);
+    return this.update(id, data);
+  }
 }
