@@ -106,4 +106,11 @@ export class CategoriesService {
     await this.assertManager(id, userId);
     return this.remove(id);
   }
+
+  private async assertManager(categoryId: number, userId: number) {
+    const cat = await this.prisma.category.findUnique({ where: { id: categoryId } });
+    if (!cat) throw new NotFoundException('Category not found');
+    await this.access.assertRole(cat.workspaceId, userId, ['OWNER', 'ADMIN']);
+    return cat;
+  }
 }
