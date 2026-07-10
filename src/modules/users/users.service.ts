@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { PrismaService } from '../../shared/prisma/prisma.service';
 import { JwtService } from '@nestjs/jwt';
 import { TelegramAuthService } from './telegram-auth.service';
@@ -13,7 +13,7 @@ export class UsersService {
 
   async loginWithTelegram(data: Record<string, string>) {
     if (!this.telegramAuth.verify(data)) {
-      throw new Error('Invalid Telegram auth data');
+      throw new UnauthorizedException('Invalid Telegram auth data');
     }
 
     const telegramId = BigInt(data.id);
