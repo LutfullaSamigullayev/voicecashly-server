@@ -29,8 +29,9 @@ export class ReportService {
           label: { uz: 'Bugun', ru: 'Сегодня', en: 'Today' },
         };
       case 'week': {
-        const mon = new Date(now);
-        mon.setDate(now.getDate() - now.getDay() + 1);
+        // getDay(): yakshanba = 0 — dushanbani haftaning boshi deb olamiz
+        const day = now.getDay() === 0 ? 7 : now.getDay();
+        const mon = new Date(now.getFullYear(), now.getMonth(), now.getDate() - day + 1);
         return { from: mon, to: now, label: { uz: 'Bu hafta', ru: 'Эта неделя', en: 'This week' } };
       }
       case 'year':
