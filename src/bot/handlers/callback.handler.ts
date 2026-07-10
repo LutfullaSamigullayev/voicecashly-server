@@ -155,12 +155,20 @@ export class CallbackHandler {
 
     if (data === 'noop') return;
 
-    // Workspace almashtirish
+    // Workspace almashtirish — callback data soxtalanishi mumkin, a'zolik tekshiriladi
     if (data.startsWith('switch:')) {
       const wsId = parseInt(data.split(':')[1]);
+      const userId = await this.getUserId(ctx);
+      if (!userId) return;
+
+      const member = await this.prisma.workspaceMember.findUnique({
+        where: { workspaceId_userId: { workspaceId: wsId, userId } },
+        include: { workspace: true },
+      });
+      if (!member) return ctx.reply(t(lang, 'no_workspace'));
+
       ctx.session.activeWorkspaceId = wsId;
-      const ws = await this.prisma.workspace.findUnique({ where: { id: wsId } });
-      return ctx.reply(t(lang, 'workspace_selected', { name: ws?.name ?? '' }));
+      return ctx.reply(t(lang, 'workspace_selected', { name: member.workspace.name }));
     }
 
     // Txtype tanlash
@@ -183,12 +191,19 @@ export class CallbackHandler {
       }
     }
 
-    // Yangi kategoriya yaratish
-    if (data.startsWith('createcat:')) {
-      const parts = data.split(':');
-      const hint = parts[1];
-      const txType = parts[2] as 'INCOME' | 'EXPENSE';
+    // Yangi kategoriya yaratish — hint/txType session'dagi pendingTx'dan
+    // ('createcat:<hint>:<txType>' eski xabarlardagi tugmalar uchun fallback)
+    if (data === 'createcat' || data.startsWith('createcat:')) {
       const wsId = ctx.session?.activeWorkspaceId;
+      let hint: string | undefined = ctx.session?.pendingTx?.categoryHint;
+      let txType: 'INCOME' | 'EXPENSE' | undefined = ctx.session?.pendingTx?.txType;
+
+      if (data.startsWith('createcat:')) {
+        const parts = data.split(':');
+        hint = hint ?? parts[1];
+        txType = txType ?? (parts[2] as 'INCOME' | 'EXPENSE');
+      }
+      if (!wsId || !hint || !txType) return ctx.reply(t(lang, 'error_generic'));
 
       const newCat = await this.categories.createFromHint(hint, wsId, txType);
       const catName = lang === 'uz' ? newCat.nameUz : lang === 'ru' ? newCat.nameRu : newCat.nameEn;
@@ -241,7 +256,11 @@ export class CallbackHandler {
       const userId = await this.getUserId(ctx);
       if (!userId) return;
 
-      await this.transactions.remove(txId, userId, 'OWNER');
+      try {
+        await this.transactions.remove(txId, userId);
+      } catch {
+        return ctx.reply(t(lang, 'error_generic'));
+      }
 
       const chatId = ctx.chat?.id ?? ctx.from?.id;
       await this.voiceHandler.cleanupTransients(ctx);
@@ -345,10 +364,11 @@ export class CallbackHandler {
       const tx = await this.transactions.findOne(txId);
       if (!tx) return;
 
+      const userId = await this.getUserId(ctx);
+      if (!userId) return ctx.reply(t(lang, 'error_generic'));
+
       const newCat = await this.categories.createFromHint(hint, wsId, tx.type as any);
-      await this.transactions.update(txId, await this.getUserId(ctx) ?? 0, 'OWNER', {
-        categoryId: newCat.id,
-      } as any);
+      await this.transactions.update(txId, userId, { categoryId: newCat.id });
 
       ctx.session.pendingNewCatHint = null;
       ctx.session.awaitingField = null;
@@ -361,7 +381,9 @@ export class CallbackHandler {
     // Tahrirlash — kategoriya saqlash
     if (data.startsWith('edit_cat:')) {
       const [, catId, txId] = data.split(':');
-      await this.transactions.update(parseInt(txId), await this.getUserId(ctx) ?? 0, 'OWNER', {
+      const userId = await this.getUserId(ctx);
+      if (!userId) return ctx.reply(t(lang, 'error_generic'));
+      await this.transactions.update(parseInt(txId), userId, {
         categoryId: parseInt(catId),
       });
       await this.cleanupAndShowUpdated(ctx, parseInt(txId), null);
