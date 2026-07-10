@@ -93,6 +93,8 @@ export class VoiceHandler {
     const lang = ctx.session?.lang ?? 'uz';
     const txId: number | null = ctx.session.editingTxId;
     if (!txId) return ctx.reply(t(lang, 'not_understood'));
+    const userId = await this.getUserId(ctx);
+    if (!userId) return ctx.reply(t(lang, 'error_generic'));
 
     if (awaiting === 'edit_amount') {
       const intent = await this.gemini.processVoice(audioBuffer, 'audio/ogg', lang);
@@ -100,7 +102,7 @@ export class VoiceHandler {
       if (!amount || isNaN(amount)) {
         return ctx.reply(t(lang, 'ask_amount'));
       }
-      await this.transactions.update(txId, 0, 'OWNER', { amount } as any);
+      await this.transactions.update(txId, userId, { amount });
       ctx.session.awaitingField = null;
       ctx.session.editingTxId = null;
       return this.refreshEditedTransaction(ctx, txId);
@@ -113,7 +115,7 @@ export class VoiceHandler {
       if (lang === 'uz') noteUpdate.noteUz = text;
       else if (lang === 'ru') noteUpdate.noteRu = text;
       else noteUpdate.noteEn = text;
-      await this.transactions.update(txId, 0, 'OWNER', noteUpdate);
+      await this.transactions.update(txId, userId, noteUpdate);
       ctx.session.awaitingField = null;
       ctx.session.editingTxId = null;
       return this.refreshEditedTransaction(ctx, txId);
@@ -134,7 +136,7 @@ export class VoiceHandler {
         const catName = intent.categoryHint;
         return ctx.reply(t(lang, 'cat_not_found', { name: catName }));
       }
-      await this.transactions.update(txId, 0, 'OWNER', { categoryId: matched.id } as any);
+      await this.transactions.update(txId, userId, { categoryId: matched.id });
       ctx.session.awaitingField = null;
       ctx.session.editingTxId = null;
       return this.refreshEditedTransaction(ctx, txId);
@@ -275,12 +277,14 @@ export class VoiceHandler {
       ctx.session.pendingTx = intent;
       ctx.session.awaitingField = 'category_confirm';
       const catName = lang === 'uz' ? similar.nameUz : lang === 'ru' ? similar.nameRu : similar.nameEn;
+      // createcat payload'siz: hint/txType session'dagi pendingTx'dan olinadi
+      // (callback_data 64 baytdan oshsa Telegram butun xabarni rad etadi)
       const msg = await ctx.reply(
         t(lang, 'cat_not_exists_use_similar', { hint: intent.categoryHint!, similar: catName }),
         {
           reply_markup: new InlineKeyboard()
             .text(t(lang, 'btn_yes'), `usecat:${similar.id}`).row()
-            .text(t(lang, 'btn_create_named', { name: intent.categoryHint! }), `createcat:${intent.categoryHint}:${intent.txType}`).row()
+            .text(t(lang, 'btn_create_named', { name: intent.categoryHint! }), 'createcat').row()
             .text(t(lang, 'btn_pick_existing'), 'listcats').row()
             .text(t(lang, 'btn_create_with_new_name'), 'newcat_input'),
         },
@@ -296,7 +300,7 @@ export class VoiceHandler {
       t(lang, 'cat_not_exists_create_new', { hint: intent.categoryHint! }),
       {
         reply_markup: new InlineKeyboard()
-          .text(t(lang, 'btn_create_named', { name: intent.categoryHint! }), `createcat:${intent.categoryHint}:${intent.txType}`).row()
+          .text(t(lang, 'btn_create_named', { name: intent.categoryHint! }), 'createcat').row()
           .text(t(lang, 'btn_pick_existing_full'), 'listcats').row()
           .text(t(lang, 'btn_create_with_new_name'), 'newcat_input').row()
           .text(t(lang, 'btn_cancel'), 'cancel'),
