@@ -40,7 +40,7 @@ npx prisma studio                       # DB ko'rish uchun GUI
 
 Deploy bo'lgach Render dashboard'da `WEBHOOK_URL` env var'ini Render URL'iga o'rnating (masalan: `https://voicecashly-server.onrender.com`). Shu bilan bot polling'dan webhook rejimiga o'tadi.
 
-> **Render free tier sovuq start:** 15 daqiqa harakatsizlikdan keyin xizmat to'xtaydi. `KeepAliveService` (`@Cron('*/14 * * * *')`) har 14 daqiqada o'zini ping qilib turadi (`RENDER_EXTERNAL_URL` yoki hardkodlangan URL). Frontend tomonida ham sahifa yuklanganda warm-up ping yuboradi.
+> **Render free tier sovuq start:** 15 daqiqa harakatsizlikdan keyin xizmat to'xtaydi. `KeepAliveService` (`@Cron('*/14 * * * *')`) har 14 daqiqada ikkita ping yuboradi: (1) o'ziga HTTP so'rov (`RENDER_EXTERNAL_URL` yoki hardkodlangan URL) — Render'ni uyg'oq tutish; (2) `SELECT 1` — Supabase'ning 7 kunlik DB-harakatsizlik pauzasini oldini olish. Frontend tomonida ham sahifa yuklanganda warm-up ping yuboradi.
 
 ---
 
@@ -69,27 +69,29 @@ Deploy bo'lgach Render dashboard'da `WEBHOOK_URL` env var'ini Render URL'iga o'r
 
 ```
 src/
-├── main.ts                    # Bootstrap: ValidationPipe (whitelist+transform), enableCors() (origin: *), BigInt toJSON, PORT env'dan, GET / va /health
-├── app.module.ts              # Root: ConfigModule (global), ScheduleModule, barcha feature modullar, KeepAliveService provider
+├── main.ts                    # Bootstrap: ValidationPipe (whitelist+transform), AllExceptionsFilter (global), enableCors() (origin: *), BigInt toJSON, PORT env'dan, GET / va /health
+├── app.module.ts              # Root: ConfigModule (global), ScheduleModule, PrismaModule, WorkspaceAccessModule, barcha feature modullar, KeepAliveService provider
 ├── shared/
-│   ├── prisma/                # PrismaService — singleton DB client, hamma joyga inject qilinadi
+│   ├── prisma/                # PrismaService — @Global singleton DB client, hamma joyga inject qilinadi
+│   ├── workspace-access/      # WorkspaceAccessService (@Global) — getRole/assertMember/assertRole
 │   ├── default-categories.ts  # Seed uchun standart 3-tilli kategoriyalar
-│   └── keep-alive/keep-alive.service.ts  # @Cron('*/14 * * * *') — Render free tier sovuq startni oldini olish
+│   └── keep-alive/keep-alive.service.ts  # @Cron('*/14 * * * *') — o'zini HTTP ping (Render) + SELECT 1 (Supabase 7 kunlik pauzani oldini olish)
 ├── common/
-│   ├── guards/jwt-auth.guard.ts        # Bearer token o'qiydi, req.user = {sub: userId, ...}
-│   └── filters/http-exception.filter.ts
+│   ├── guards/jwt-auth.guard.ts          # Bearer token o'qiydi, req.user = {sub: userId, ...}
+│   ├── guards/workspace-member.guard.ts  # workspaceId (query/body/X-Workspace-Id) bo'yicha a'zolikni tekshiradi, req.workspaceRole'ni to'ldiradi
+│   └── filters/http-exception.filter.ts  # main.ts'da global registratsiya qilingan
 ├── modules/                   # REST API modullari (har biri service + controller + module)
 │   ├── users/                 # Auth, settings, Telegram login + web login (bot-auth flow)
-│   │   ├── users.controller.ts          # /auth/telegram, /auth/bot/start, /auth/bot/check, /auth/me, /settings
+│   │   ├── users.controller.ts          # /auth/telegram, /auth/bot/start, /auth/bot/check, /auth/me, /settings (UpdateSettingsDto)
 │   │   ├── users.service.ts             # loginWithTelegram, findById, updateSettings
 │   │   ├── telegram-auth.service.ts     # Login Widget HMAC verify
 │   │   ├── bot-auth.service.ts          # LoginToken: start/confirm/check (web login orqali bot)
-│   │   └── users.module.ts              # JwtModule.register({ secret, expiresIn: '30d' })
-│   ├── workspaces/            # Personal/team workspace, invite kodlar, rename/delete
-│   ├── categories/            # Workspace bo'yicha kategoriyalar, fuzzy match
-│   ├── transactions/          # CRUD + CSV export, amountUzs normalizatsiya, DTO'lar
+│   │   └── users.module.ts              # JwtModule.registerAsync (env ConfigModule yuklangach o'qiladi), expiresIn: '30d'
+│   ├── workspaces/            # Personal/team workspace, invite kodlar, rename/delete (REST + bot)
+│   ├── categories/            # Workspace bo'yicha kategoriyalar, fuzzy match; REST'da CRUD DTO + rol tekshiruvi
+│   ├── transactions/          # CRUD + CSV export, amountUzs normalizatsiya (create/update), DTO'lar
 │   ├── analytics/             # Oylik trend, kategoriya bo'yicha hisobot
-│   ├── budgets/               # Kategoriya/oy bo'yicha byudjet limit
+│   ├── budgets/               # Kategoriya/oy bo'yicha byudjet limit (upsert OWNER/ADMIN)
 │   └── exchange-rates/        # CBU.uz USD/UZS kurslari, har kuni @Cron orqali
 └── bot/
     ├── bot.module.ts          # Imports: Categories, Transactions, ExchangeRates, Budgets, Workspaces, Users (BotAuthService uchun)
@@ -181,7 +183,7 @@ navigate('/')
 | `lang` | `'uz'\|'ru'\|'en'` | Foydalanuvchi tili (default: `'uz'`) |
 | `activeWorkspaceId` | `number\|null` | Joriy faol workspace |
 | `pendingTx` | `any\|null` | Maydonlar to'ldirilayotgan partial Intent |
-| `awaitingField` | `string\|null` | Bot qaysi inputni kutayotgani (qiymatlar quyida) |
+| `awaitingField` | `string\|null` | Bot qaysi inputni kutayotgani (to'liq ro'yxat quyida) |
 | `lastTxId` | `number\|null` | Oxirgi saqlangan tranzaksiya ID'si |
 | `lastTxMessageId` | `number\|null` | Oxirgi tranzaksiya card xabari ID'si |
 | `lastBotPromptId` | `number\|null` | Oxirgi bot savoli xabari ID'si |
@@ -191,7 +193,7 @@ navigate('/')
 | `transientMsgIds` | `number[]` | Flow tugagandan keyin o'chiriladigan xabar ID'lari |
 | `pendingNewCatHint` | `string\|null` | Tasdiqlash kutilayotgan kategoriya nomi |
 
-`awaitingField` qiymatlari: `'amount'` · `'edit_amount'` · `'edit_note'` · `'edit_category'` · `'category_new_input'` · `'edit_category_new_input'` · `'team_name'` · `'rename_workspace'`
+`awaitingField` qiymatlari: `'amount'` · `'txType'` · `'category'` · `'category_confirm'` · `'category_new'` · `'category_new_input'` · `'edit_amount'` · `'edit_note'` · `'edit_category'` · `'edit_category_new_input'` · `'team_name'` · `'rename_workspace'`
 
 > Eslatma: session in-memory (default grammY session). Server qayta ishga tushganda yo'qoladi. Persistence kerak bo'lsa `@grammyjs/storage-*`'ga o'tish kerak.
 
@@ -206,10 +208,10 @@ navigate('/')
 | `start:team` | Jamoa nomi so'rash |
 | `start:new` | Yaratish menyusini ko'rsatish (workspace ro'yxatidan) |
 | `create_team:<name>` | Nomlangan jamoa workspace'i yaratish |
-| `switch:<wsId>` | Faol workspace'ni almashtirish |
+| `switch:<wsId>` | Faol workspace'ni almashtirish (a'zolik tekshiriladi — soxta callback ishlamaydi) |
 | `txtype:INCOME/EXPENSE` | Pending tranzaksiya uchun tur belgilash |
 | `usecat:<catId>` | Pending tranzaksiyaga kategoriya biriktirish |
-| `createcat:<hint>:<txType>` | Hint'dan yangi kategoriya yaratish, pending tx'ga biriktirish |
+| `createcat` | Sessiondagi `pendingTx.categoryHint/txType`'dan yangi kategoriya yaratish (payloadsiz — callback_data 64-bayt limitidan qochish uchun; eski `createcat:<hint>:<txType>` fallback sifatida qo'llanadi) |
 | `listcats` | Kategoriya tanlash klaviaturasini ko'rsatish |
 | `newcat_input` | Foydalanuvchidan yangi kategoriya nomi so'rash |
 | `confirm_newcat` | Yozilgan kategoriyani tasdiqlash va yaratish |
@@ -261,7 +263,7 @@ User ikki yo'l bilan yaratiladi:
 1. **Bot'da `getUserId(ctx)`** (`command.handler.ts`/`callback.handler.ts`) — Telegram'dan kelgan birinchi xabarda upsert (workspace yaratilmaydi)
 2. **`POST /auth/telegram`** (Telegram Login Widget — hozir frontend ishlatmaydi) — upsert qiladi, workspace yaratilmaydi
 
-> **Diqqat:** workspace **avtomatik yaratilmaydi**. Foydalanuvchi botda `/start` qilib language tanlasagina shaxsiy workspace yaratish menyusi chiqadi. Frontend'da `/onboarding` sahifasi mavjud workspace yo'q bo'lsa ko'rinadi, lekin u faqat botga yo'naltiradi (workspace yaratish tugmasi yo'q).
+> **Diqqat:** workspace **avtomatik yaratilmaydi**. Bot'da `/start` → til tanlash → shaxsiy/jamoa yaratish menyusi. Web'da esa `/onboarding` sahifasidagi "Shaxsiy hisob yaratish" tugmasi yoki WorkspaceSwitcher'dagi "Yangi yaratish" `POST /workspaces`'ni chaqiradi.
 
 ### Invite Tizimi
 
@@ -270,16 +272,20 @@ User ikki yo'l bilan yaratiladi:
 - Faqat OWNER invite link yarata oladi
 - Qabul qiluvchi linkni bosadi → bot `/start join_<code>` ni qayta ishlaydi → MEMBER sifatida qo'shiladi
 
-### Workspace Boshqaruvi (/settings orqali)
+### Workspace Boshqaruvi
 
-- **Nomini o'zgartirish** (OWNER yoki ADMIN): `/settings` → Hisob sozlamalari → Nomini o'zgartirish → yangi nom yozing
-- **O'chirish** (faqat OWNER): tasdiqlash talab qilinadi; barcha tranzaksiya, kategoriya, byudjet, takrorlanadigan tranzaksiyalar ham o'chiriladi; agar yagona workspace bo'lsa — bloklangan
+Ikkala kanaldan ham ishlaydi (rol tekshiruvlari `WorkspacesService` ichida):
+
+- **Bot:** `/settings` → Hisob sozlamalari → Nomini o'zgartirish / O'chirish
+- **Web:** `PATCH /workspaces/:id` (rename) va `DELETE /workspaces/:id` — frontend Settings/Team sahifalari chaqiradi
+
+Qoidalar: nom o'zgartirish — OWNER yoki ADMIN; o'chirish — faqat OWNER, tasdiqlash bilan; o'chirishda barcha tranzaksiya, kategoriya, byudjet, takrorlanadigan tranzaksiyalar ham o'chiriladi; yagona workspace'ni o'chirish bloklangan.
 
 ### Commands Menyusi
 
 `bot.service.ts` `onModuleInit()` da global `setMyCommands` ni 3 til kodi (`uz`, `ru`, `en`) uchun chaqiradi. Foydalanuvchi tilni o'zgartirsa (`/lang` yoki `/start` orqali), shu chat uchun `scope: { type: 'chat', chat_id }` bilan `setMyCommands` qayta chaqiriladi. Umumiy komandalar ro'yxati `src/bot/helpers/commands.ts` da joylashgan.
 
-### Auth oqimi (REST API)
+### Auth va Avtorizatsiya (REST API)
 
 1. Frontend `POST /auth/bot/start` chaqirib token + deep link oladi (yuqoridagi Web Login oqimi)
 2. Yoki Telegram Login Widget `POST /auth/telegram` (hozir frontend ishlatmaydi):
@@ -287,11 +293,16 @@ User ikki yo'l bilan yaratiladi:
    - `UsersService.loginWithTelegram()` — User upsert → JWT qaytaradi
 3. JWT `expiresIn: '30d'`, payload: `{ sub: userId, tid: telegramId.toString() }`
 4. Himoyalangan endpointlar `@UseGuards(JwtAuthGuard)` ishlatadi — guard `req.user.sub = userId` qo'yadi
+5. **Workspace darajasidagi avtorizatsiya ikki qatlamda:**
+   - `workspaceId` qabul qiladigan endpointlar `@UseGuards(JwtAuthGuard, WorkspaceMemberGuard)` — guard query/body/`X-Workspace-Id`'dan workspaceId o'qib a'zolikni tekshiradi, rolni `req.workspaceRole`'ga yozadi (a'zo bo'lmasa 403)
+   - ID bo'yicha ishlaydigan endpointlar (`PATCH/DELETE /transactions/:id`, `/categories/:id`) — service ichida entity'ning workspace'i aniqlanib, `WorkspaceAccessService.assertMember/assertRole` bilan tekshiriladi
 
 ### Valyuta bilan ishlash
 
 - Har bir tranzaksiya `amount`/`currency` (asl) va `amountUzs` (UZS'ga normallashtirilgan) ikkalasini ham saqlaydi
-- CBU.uz kurslari har kuni 09:00'da `@Cron('0 9 * * *')` orqali olinadi (`ExchangeRatesModule`)
+- `TransactionsService.create` — `amountUzs` berilmagan bo'lsa (web/API) o'zi hisoblaydi: UZS'da `amount`, USD'da `amount × kurs`; bot esa tayyor `amountUzs` yuboradi
+- `TransactionsService.update` — `amount` yoki `currency` o'zgarsa `amountUzs`/`exchangeRate` qayta hisoblanadi (aks holda summary/analytics eskirgan qiymat ko'rsatadi)
+- CBU.uz kurslari har kuni 09:00'da `@Cron('0 9 * * *')` orqali olinadi (`ExchangeRatesModule`); kurs topilmasa fallback: 12700
 - User valyutani aytmasa, `UserSettings.defaultCurrency` jimgina ishlatiladi (so'ramaydi)
 
 ### Multi-language (i18n)
@@ -300,23 +311,27 @@ User ikki yo'l bilan yaratiladi:
 - Barcha foydalanuvchiga ko'rinadigan matnlarning uz/ru/en variantlari mavjud; `ctx.session.lang` qaysi birini ishlatishni belgilaydi
 - Til session'da ham, `UserSettings.language` (DB) da ham saqlanadi
 - Kategoriyalarda `nameUz`, `nameRu`, `nameEn` saqlanadi — har doim user tilida ko'rsatiladi
-- Tranzaksiya izohlari `noteUz`, `noteRu`, `noteEn` sifatida saqlanadi — faqat mos til ustuni yoziladi
+- Tranzaksiya izohlari `noteUz`, `noteRu`, `noteEn` sifatida saqlanadi. Bot tahririda faqat joriy til ustuni yoziladi; web `note` yuborsa (create ham, update ham) uchchala ustunga bir xil qiymat yoziladi
 
 ### Workspace Rollari
 
 | Amal | OWNER | ADMIN | MEMBER |
 |------|-------|-------|--------|
 | Tranzaksiya qo'shish | ✅ | ✅ | ✅ |
-| O'zining tranzaksiyasini o'chirish | ✅ | ✅ | ✅ |
-| Boshqalarning tranzaksiyasini o'chirish | ✅ | ✅ | ❌ |
-| Kategoriya yaratish / byudjet o'rnatish | ✅ | ✅ | ❌ |
+| O'zining tranzaksiyasini o'zgartirish/o'chirish | ✅ | ✅ | ✅ |
+| Boshqalarning tranzaksiyasini o'zgartirish/o'chirish | ✅ | ✅ | ❌ |
+| Kategoriya yaratish/tahrirlash/o'chirish (REST) | ✅ | ✅ | ❌ |
+| Byudjet o'rnatish (REST) | ✅ | ✅ | ❌ |
 | Workspace nomini o'zgartirish | ✅ | ✅ | ❌ |
 | Workspace'ni o'chirish | ✅ | ❌ | ❌ |
 | Member taklif qilish | ✅ | ❌ | ❌ |
 
-Rol `TransactionsService.update/remove()` ichida tekshiriladi — MEMBER boshqa kishining yozuvini o'zgartirsa `ForbiddenException`.
+Amalga oshirilishi:
+- Tranzaksiya: `TransactionsService.assertCanModify()` — tx'ning workspace'idagi haqiqiy rol `WorkspaceAccessService` orqali o'qiladi; MEMBER faqat o'z yozuvini o'zgartira oladi, a'zo bo'lmagan user 403 oladi. Bot handlerlari ham xuddi shu service metodlarini real `userId` bilan chaqiradi.
+- Kategoriya/byudjet: REST controller `req.workspaceRole === 'MEMBER'` bo'lsa 403 (`categories.controller.ts`, `budgets.controller.ts`); ID bo'yicha update/delete `CategoriesService.updateChecked/removeChecked` orqali OWNER/ADMIN talab qiladi.
+- Workspace rename/delete: `WorkspacesService` ichida.
 
-> ⚠️ **Ma'lum bug:** `TransactionsController.update`/`remove` `req.user.sub`'ga `'OWNER'` rolini hardkodlangan tarzda uzatadi (`transactions.controller.ts:67,72`). Bu MEMBER'ning ham boshqalarning yozuvini o'chirishiga ruxsat beradi. Rol guard'i `WorkspaceMember`'dan o'qilishi kerak.
+> ⚠️ **Bot istisnosi:** bot voice-flow'da MEMBER ham hint'dan kategoriya yaratishi mumkin (`createFromHint` rol tekshirmaydi) — bu suhbat oqimini buzmaslik uchun ataylab qilingan. Rol cheklovi faqat REST API'da qat'iy.
 
 ### Asosiy Prisma modellari
 
@@ -344,6 +359,8 @@ Rol `TransactionsService.update/remove()` ichida tekshiriladi — MEMBER boshqa 
 
 ## REST API Reference (frontend integratsiyasi uchun)
 
+Guard belgilari: **JWT** = `JwtAuthGuard` · **WS** = `WorkspaceMemberGuard` (workspaceId bo'yicha a'zolik, `req.workspaceRole`) · **svc** = rol/a'zolik service ichida tekshiriladi
+
 | Method · Path | Guard | Tavsif |
 |---------------|-------|--------|
 | `GET /` | yo'q | `{ status: 'ok' }` (root health) |
@@ -351,23 +368,29 @@ Rol `TransactionsService.update/remove()` ichida tekshiriladi — MEMBER boshqa 
 | `POST /bot/webhook` | yo'q | grammY update — faqat Telegram chaqiradi |
 | `POST /auth/telegram` | yo'q | Login Widget HMAC verify → JWT |
 | `POST /auth/bot/start` | yo'q | `{ token, deepLink, expiresAt }` — web login boshlash |
-| `GET /auth/bot/check?token=` | yo'q | `{ status: pending|confirmed|expired, jwt?, user? }` |
+| `GET /auth/bot/check?token=` | yo'q | `{ status: pending|confirmed|expired, jwt?, user?, activeWorkspaceId? }` |
 | `GET /auth/me` | JWT | Current user + settings + workspaces |
-| `GET /settings` · `PATCH /settings` | JWT | UserSettings |
+| `GET /settings` · `PATCH /settings` | JWT | UserSettings (PATCH — `UpdateSettingsDto`) |
 | `GET /workspaces/me` | JWT | `WorkspaceMember[]` with `workspace.settings` |
-| `POST /workspaces` | JWT | `{ name, type: 'personal'\|'team' }` |
+| `POST /workspaces` | JWT | `{ name?, type: 'personal'\|'team' }` (`CreateWorkspaceDto`) |
 | `POST /workspaces/join` | JWT | `{ inviteCode }` |
-| `GET /workspaces/:id` | JWT | Workspace + settings + members.user |
-| `GET /workspaces/:id/invite` | JWT (OWNER) | `{ code }` |
-| `GET /categories?workspaceId=` · CRUD | JWT | Category[] |
-| `GET /transactions?workspaceId=&type=&categoryId=&from=&to=&page=&limit=` | JWT | `{ items, total, page, limit }` |
-| `GET /transactions/summary?workspaceId=&from=&to=` | JWT | `{ income, expense, net }` (amountUzs) |
-| `GET /transactions/export?workspaceId=&from=&to=` | JWT | CSV file |
-| `POST/PATCH/DELETE /transactions[/:id]` | JWT | DTO bilan validatsiya |
-| `GET /analytics/monthly?workspaceId=&months=` | JWT | `MonthlyPoint[]` |
-| `GET /analytics/by-category?workspaceId=&type=&from=&to=` | JWT | Category breakdown |
-| `GET /budgets?workspaceId=&month=&year=` · `GET /budgets/progress` · `POST /budgets` | JWT | |
-| `GET /exchange-rates/latest` | JWT yoki yo'q (controller'da tekshiring) | Latest rates |
+| `GET /workspaces/:id` | JWT + svc | Workspace + settings + members.user (a'zo bo'lmasa 403) |
+| `GET /workspaces/:id/invite` | JWT + svc (OWNER) | `{ code }` |
+| `PATCH /workspaces/:id` | JWT + svc (OWNER/ADMIN) | `{ name }` — nomini o'zgartirish |
+| `DELETE /workspaces/:id` | JWT + svc (OWNER) | Workspace'ni butun ma'lumotlari bilan o'chirish; yagona workspace bo'lsa 403 |
+| `GET /categories?workspaceId=` | JWT + WS | Category[] |
+| `POST /categories` | JWT + WS (OWNER/ADMIN) | `CreateCategoryDto` |
+| `PATCH/DELETE /categories/:id` | JWT + svc (OWNER/ADMIN) | `UpdateCategoryDto`; delete = arxivlash (isArchived) |
+| `GET /transactions?workspaceId=&type=&categoryId=&from=&to=&page=&limit=` | JWT + WS | `{ items, total, page, limit }` — `total` filtrlarga mos |
+| `GET /transactions/summary?workspaceId=&from=&to=` | JWT + WS | `{ income, expense, net }` (amountUzs) |
+| `GET /transactions/export?workspaceId=&from=&to=` | JWT + WS | CSV file (maydonlar RFC-4180 bo'yicha escape qilinadi) |
+| `POST /transactions` | JWT + WS | `CreateTransactionDto` |
+| `PATCH/DELETE /transactions/:id` | JWT + svc | MEMBER faqat o'zinikini; boshqa workspace a'zosi 403 |
+| `GET /analytics/monthly?workspaceId=&months=` | JWT + WS | `{ month: 'YYYY-MM', income, expense, net }[]` |
+| `GET /analytics/by-category?workspaceId=&type=&from=&to=` | JWT + WS | Flat shape: `{ categoryId, nameUz/Ru/En, color, amount }[]` |
+| `GET /budgets?workspaceId=&month=&year=` · `GET /budgets/progress` | JWT + WS | progress: `{ budget: Budget&{category}, spent, limit, percent, status }[]` |
+| `POST /budgets` | JWT + WS (OWNER/ADMIN) | `UpsertBudgetDto` |
+| `GET /exchange-rates/latest` | JWT | Bitta eng so'nggi kurs yozuvi yoki `null` |
 
 > CORS: `main.ts`'da `app.enableCors()` argumentsiz — default `Access-Control-Allow-Origin: *`. Frontend domeni o'zgarsa hech narsa qilish shart emas.
 
@@ -378,6 +401,8 @@ Rol `TransactionsService.update/remove()` ichida tekshiriladi — MEMBER boshqa 
 - **DTO validatsiya:** `class-validator` dekoratorlari + `main.ts`'da global `ValidationPipe({ whitelist: true, transform: true })`. Yangi endpoint qilsangiz DTO yarating. `@Type(() => Number)` query param raqamlar uchun.
 - **PrismaService** — `shared/prisma/`'dan inject qiling, har bir module'da yangi instance yaratmang.
 - **Auth guard** — barcha himoyalangan endpoint'larga `@UseGuards(JwtAuthGuard)` qo'ying. `req.user.sub` — userId.
+- **Workspace guard** — `workspaceId` qabul qiladigan yangi endpoint'ga `@UseGuards(JwtAuthGuard, WorkspaceMemberGuard)` qo'ying (tartib muhim!). Rol kerak bo'lsa `req.workspaceRole`'dan o'qing. ID bo'yicha mutatsiyalarda esa service ichida `WorkspaceAccessService` bilan tekshiring.
+- **Env o'qish** — modul dekoratorida (`register()`) `process.env` o'qimang: dekoratorlar ConfigModule .env'ni yuklashidan OLDIN bajariladi. `registerAsync`/factory yoki constructor ichida o'qing.
 - **Cron joblar** — `@Cron()` dekoratori bilan service ichida; `ScheduleModule.forRoot()` `app.module.ts`'da global yoqilgan.
 - **Bot xatoliklari** — handler ichida tutib oling va lokalizatsiyalangan xabar bilan javob bering, throw qilmang (webhook 500 qaytarmasin). `bot.service.ts`'da `bot.catch()` "message is not modified" xatosini jim qiladi.
 - **Pul qiymatlari** — Prisma `Decimal(14, 2)`. JS'da `.toNumber()` faqat ko'rsatish uchun, hisob-kitobda `Decimal` saqlang. Frontend `string` sifatida oladi → `Number()` orqali.
